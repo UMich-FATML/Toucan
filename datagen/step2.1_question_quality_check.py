@@ -289,10 +289,17 @@ for i, entry in enumerate(tqdm(input_data)):
             ]
         }
         
-        # Add original fields if they exist
-        if 'server_analysis' in entry:
+        # Add original fields if they exist (support both old and new field names)
+        # Preserve analysis field (tool_analysis or server_analysis)
+        if 'tool_analysis' in entry:
+            result['tool_analysis'] = entry['tool_analysis']
+        elif 'server_analysis' in entry:
             result['server_analysis'] = entry['server_analysis']
-        if 'cross_server_workflow' in entry:
+
+        # Preserve workflow field (cross_tool_workflow or cross_server_workflow)
+        if 'cross_tool_workflow' in entry:
+            result['cross_tool_workflow'] = entry['cross_tool_workflow']
+        elif 'cross_server_workflow' in entry:
             result['cross_server_workflow'] = entry['cross_server_workflow']
         if 'target_tools' in entry:
             result['target_tools'] = entry['target_tools']

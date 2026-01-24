@@ -359,9 +359,19 @@ def extract_quality_assessments(input_file, output_file, preview_file=None):
                     "metadata": data.get("metadata", {}),
                     "question": data.get("question", ""),
                     "target_tools": data.get("target_tools", ""),
-                    "server_analysis": data.get("server_analysis", ""),
-                    "cross_server_workflow": data.get("cross_server_workflow", "")
                 }
+
+                # Add analysis field (preserves original field name: tool_analysis or server_analysis)
+                if 'tool_analysis' in data:
+                    result['tool_analysis'] = data['tool_analysis']
+                elif 'server_analysis' in data:
+                    result['server_analysis'] = data.get('server_analysis', '')
+
+                # Add workflow field (preserves original field name: cross_tool_workflow or cross_server_workflow)
+                if 'cross_tool_workflow' in data:
+                    result['cross_tool_workflow'] = data['cross_tool_workflow']
+                elif 'cross_server_workflow' in data:
+                    result['cross_server_workflow'] = data.get('cross_server_workflow', '')
 
                 # Clean unusual line terminators
                 result = clean_json_object(result)
