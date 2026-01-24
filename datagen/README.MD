@@ -48,6 +48,10 @@ This step creates structured prompts for tool-use question generation. You can c
    2.5. Multi-server with custom server allocation:
         python step1.1_gen_questions.py --mode multi_server --num_tools 4 --multi_server_allocated_servers 3 --total_prompts 500
 
+3. Generate Questions Grounded in O*NET Occupations and Tasks:
+   3.1. Generate questions grounded in O*NET occupations and tasks:
+        python step1.1_gen_questions_onet.py --num_tools 3 --total_prompts 1000
+
 Key Parameters:
 - --sampling_strategy: Controls server selection (random/uniform/power_law/featured) - ONLY for single_server mode
 - --mode: single_server (individual servers) vs multi_server (server combinations)  
