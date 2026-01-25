@@ -168,10 +168,13 @@ def extract_individual_components(response_xml, metadata=None):
     new field names (tool_analysis, cross_tool_workflow), preserving the original format.
     """
 
-    mode = metadata.get("question_gen_args", {}).get("mode", "unknown")
+    # Try getting mode from question_gen_args, fallback to top-level metadata
+    mode = metadata.get("question_gen_args", {}).get("mode")
+    if not mode:
+        mode = metadata.get("mode", "unknown")
     if mode == "unknown":
         raise ValueError(f"Mode is unknown in metadata: {metadata}")
-    elif mode == "multi_server":
+    elif mode in ["multi_server", "onet_occupation"]:
         # Multi-server format: extract analysis and workflow fields
         # Try new names first, fall back to old names
         tool_analysis = extract_xml_content(response_xml, 'tool_analysis')
@@ -272,13 +275,16 @@ def extract_xml_tools(text, metadata=None):
         return ""
     
     # Get mode from metadata
-    mode = metadata.get("question_gen_args", {}).get("mode", "unknown")
+    # Try getting mode from question_gen_args, fallback to top-level metadata
+    mode = metadata.get("question_gen_args", {}).get("mode")
+    if not mode:
+        mode = metadata.get("mode", "unknown")
     if mode == "unknown":
         raise ValueError(f"Mode is unknown in metadata: {metadata}")
 
     
     # Strategy 1: XML tool tags with server attributes - must be multi_server mode
-    if mode == "multi_server":     
+    if mode in ["multi_server", "onet_occupation"]:     
         # Check if we have XML tool tags with server attributes (Strategy 1)
         tool_pattern = r'<tool[^>]*server="([^"]*)"[^>]*>(.*?)</tool>'
         tool_matches = re.findall(tool_pattern, target_tools_content, re.DOTALL)
@@ -507,7 +513,7 @@ def extract_questions(input_file, output_file, preview_file=None):
                     result['server_analysis'] = parsed_response['server_analysis']
 
                 # Add workflow field for multi-server mode (cross_tool_workflow or cross_server_workflow)
-                if mode == "multi_server":
+                if mode in ["multi_server", "onet_occupation"]:
                     if 'cross_tool_workflow' in parsed_response:
                         result['cross_tool_workflow'] = parsed_response['cross_tool_workflow']
                     elif 'cross_server_workflow' in parsed_response:
@@ -773,7 +779,14 @@ def prepare_questions(input_file, output_file):
             
             # Collect statistics
             stats["total_questions"] += 1
-            mode = filtered_metadata.get("question_gen_args", {}).get("mode", "unknown")
+            
+            # Try getting mode from question_gen_args, fallback to top-level metadata
+            mode = filtered_metadata.get("question_gen_args", {}).get("mode")
+            if not mode:
+                mode = filtered_metadata.get("mode", "unknown")
+
+            if mode == "unknown":
+                raise ValueError(f"Mode is unknown in metadata: {filtered_metadata}")
             if mode == "unknown":
                 raise ValueError(f"Mode is unknown in metadata: {filtered_metadata}")
             if mode == "single_server":
