@@ -1,0 +1,2550 @@
+[
+  {
+    "target_tools": "ArcKnowledge::list_knowledge_document_sources, ArcKnowledge::query_knowledge_base",
+    "question": "I'm a Document Management Specialist handling an urgent benefits inquiry from a remote employee in the EMEA region about Q1 2024 enrollment deadlines. Our organization maintains separate documentation systems for HR, Legal, and Compliance departments, but not all contain current benefits information—some have outdated policy documents. I need to first identify which repositories are available and determine which ones are relevant and current, then search specifically for 'remote employee benefits enrollment EMEA Q1 2024' across only those identified sources. How can I efficiently accomplish this two-step process to ensure I'm providing accurate, up-to-date information?",
+    "metadata": {
+      "prompt_id": "00000000",
+      "row_id": 0,
+      "mode": "onet_occupation",
+      "question_gen_args": {
+        "num_tools": 2,
+        "total_prompts": 10,
+        "output_folder": "../data",
+        "job_name": null,
+        "timestamp": 1769389186,
+        "seed": null
+      },
+      "onet_soc_code": "15-1299.03",
+      "occupation_title": "Document Management Specialists",
+      "sampled_tools": [
+        {
+          "server_idx": 557,
+          "tool_idx": 1,
+          "tool_name": "list_knowledge_document_sources",
+          "server_name": "ArcKnowledge"
+        },
+        {
+          "server_idx": 557,
+          "tool_idx": 3,
+          "tool_name": "query_knowledge_base",
+          "server_name": "ArcKnowledge"
+        }
+      ],
+      "mcp_servers": [
+        {
+          "server_id": 2422,
+          "server_name": "ArcKnowledge",
+          "rank_by_usage": 2423,
+          "server_info": {
+            "id": 2422,
+            "name": "ArcKnowledge",
+            "author": "@dragonjump/mcp-ARCknowledge",
+            "overview": "Manage and query your custom knowledge base webhook endpoints seamlessly. Add, list, and search multiple document sources through a unified interface to aggregate knowledge efficiently. Simplify knowledge base integration and querying with this easy-to-use MCP server.",
+            "repository_url": "https://github.com/dragonjump/mcp-ARCknowledge",
+            "homepage": "https://smithery.ai/server/@dragonjump/mcp-ARCknowledge",
+            "remote_or_local": "Remote",
+            "license": "MIT",
+            "usage_count": "Not available",
+            "success_rate": "Not available",
+            "tags": [
+              "search",
+              "web",
+              "api",
+              "mcp"
+            ],
+            "categories": [
+              "search",
+              "api"
+            ],
+            "python_sdk": "import mcp\nfrom mcp.client.streamable_http import streamablehttp_client\nimport json\nimport base64\n\nconfig = {\n  \"knowledgeDocumentPath\": \"\"\n}\n# Encode config in base64\nconfig_b64 = base64.b64encode(json.dumps(config).encode()).decode()\nsmithery_api_key = \"\"\n\n# Create server URL\nurl = f\"https://server.smithery.ai/@dragonjump/mcp-ARCknowledge/mcp?config={config_b64}&api_key={smithery_api_key}\"\n\nasync def main():\n    # Connect to the server using HTTP client\n    async with streamablehttp_client(url) as (read_stream, write_stream, _):\n        async with mcp.ClientSession(read_stream, write_stream) as session:\n            # Initialize the connection\n            await session.initialize()\n            # List available tools\n            tools_result = await session.list_tools()\n            print(f\"Available tools: {', '.join([t.name for t in tools_result.tools])}\")\n\nif __name__ == \"__main__\":\n    import asyncio\n    asyncio.run(main())",
+            "configuration_schema": "",
+            "smithery_configuration_requirements": [],
+            "python_sdk_config": "{\n  \"knowledgeDocumentPath\": \"\"\n}",
+            "python_sdk_url": "https://server.smithery.ai/@dragonjump/mcp-ARCknowledge/mcp?config={config_b64}&api_key={smithery_api_key}"
+          },
+          "remote_server_response": {
+            "url": "https://server.smithery.ai/@dragonjump/mcp-ARCknowledge/mcp?config=eyJrbm93bGVkZ2VEb2N1bWVudFBhdGgiOiAiIn0=&api_key={smithery_api_key}&profile={smithery_profile}",
+            "is_success": true,
+            "error": null,
+            "tools": [
+              {
+                "name": "update_knowledge_document_source",
+                "description": "\n    Update the knowledge document source URL with custom config JSON file\n    \n    Args:\n        knowledge_document_path: Path to the JSON config file\n    \n    Returns:\n        str: Confirmation message\n    ",
+                "input_schema": {
+                  "properties": {
+                    "knowledge_document_path": {
+                      "title": "Knowledge Document Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "knowledge_document_path"
+                  ],
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "list_knowledge_document_sources",
+                "description": "\n    List all registered knowledge document sources\n    \n    Returns:\n        Dict[str, Dict[str, str]]: Dictionary of source IDs mapping to their properties\n    ",
+                "input_schema": {
+                  "properties": {},
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "load_image",
+                "description": "Load an image from disk",
+                "input_schema": {
+                  "properties": {
+                    "path": {
+                      "title": "Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "query_knowledge_base",
+                "description": "\n    Query the specified knowledge document sources using knowledge base\n    \n    Args:\n        query: The search query or question user ask\n        source_ids: list of source IDs to query (if None, queries all sources)\n        image: base64 encoded image string to include in the query\n    \n    Returns:\n        str: Retrieved and processed results\n    ",
+                "input_schema": {
+                  "properties": {
+                    "query": {
+                      "title": "Query",
+                      "type": "string"
+                    },
+                    "source_ids": {
+                      "default": [],
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Source Ids",
+                      "type": "array"
+                    },
+                    "image": {
+                      "default": "",
+                      "title": "Image",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ],
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "add_new_knowledge_document_source",
+                "description": "\n    Add a new knowledge document source URL and append to existing sources\n    \n    Args:\n        url: URL of the knowledge document source\n        description: description of the source \n        apikey: apikey of the source\n    Returns:\n        str: Confirmation message\n    ",
+                "input_schema": {
+                  "properties": {
+                    "url": {
+                      "title": "Url",
+                      "type": "string"
+                    },
+                    "description": {
+                      "default": "",
+                      "title": "Description",
+                      "type": "string"
+                    },
+                    "apikey": {
+                      "default": "",
+                      "title": "Apikey",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "type": "object"
+                },
+                "annotations": null
+              }
+            ],
+            "tool_count": 5,
+            "tool_names": [
+              "update_knowledge_document_source",
+              "list_knowledge_document_sources",
+              "load_image",
+              "query_knowledge_base",
+              "add_new_knowledge_document_source"
+            ]
+          },
+          "labels": {
+            "analysis": "The MCP Server \"ArcKnowledge\" primarily functions as a knowledge base management system that allows users to aggregate, query, and manage multiple document sources through a unified interface. Its tools enable adding, updating, and listing knowledge document sources, as well as querying these sources with optional image input. This makes it a powerful tool for organizing and retrieving information from diverse sources efficiently.",
+            "reasoning": "The primary functionality revolves around managing and querying knowledge bases, which aligns closely with the \"Memory Management\" category. Secondary labels like \"Database Operations\" and \"AI/ML Tools\" are relevant because the system handles data storage and retrieval (like a database) and might use advanced querying techniques (possibly AI-driven) to process and return results. No custom label is needed as the predefined categories adequately cover the server's capabilities.",
+            "primary_label": "Memory Management",
+            "secondary_labels": [
+              "Database Operations",
+              "AI/ML Tools"
+            ],
+            "custom_label": null,
+            "is_connected": true,
+            "is_remote_tool_valid": true,
+            "featured_server": false
+          },
+          "original_file": "../crawler/smithery/@dragonjump_mcp-ARCknowledge.json",
+          "source_file_path": "../mcp_servers/2423.@dragonjump_mcp-ARCknowledge_labeled.json",
+          "source_filename": "2423.@dragonjump_mcp-ARCknowledge_labeled.json",
+          "processed_timestamp": 1753731940,
+          "processing_source": "",
+          "rank": 2069
+        }
+      ],
+      "synthetic_data_gen_configs": [
+        {
+          "model": "kimi-k2-thinking",
+          "generation_params": {
+            "engine": "openrouter_api",
+            "model_path": "moonshotai/kimi-k2-thinking",
+            "temperature": 1.0,
+            "max_tokens": 32768,
+            "top_p": 1.0,
+            "repetition_penalty": 1.0,
+            "num_trials": 1,
+            "step": "1.2"
+          },
+          "timestamp": 1769389649
+        }
+      ],
+      "server_count": 1
+    },
+    "min_distance": 1.3728041648864746,
+    "duplicate_count": 0,
+    "min_similar_row_id": 3,
+    "tool_analysis": "The two tools from ArcKnowledge create a powerful discovery-to-search pipeline essential for document management workflows. The list_knowledge_document_sources tool serves as a reconnaissance function, enabling users to inventory available repositories and examine their metadata (department ownership, update timestamps, content descriptions). This is critical for filtering out obsolete or irrelevant sources before searching. The query_knowledge_base tool then executes targeted searches across only the vetted sources, preventing information overload and ensuring precision. Together they mirror real-world best practices where information professionals first scope their information landscape, then perform focused retrieval—essential for maintaining accuracy and efficiency when dealing with large organizational knowledge systems.",
+    "cross_tool_workflow": "The workflow begins with calling list_knowledge_document_sources, which returns a dictionary mapping source IDs to their properties. The user examines this metadata to identify which repositories are relevant and current—such as HR documentation systems updated within the last year that contain benefits information. After selecting the appropriate source IDs, the user proceeds to the second step: calling query_knowledge_base with the specific search query \"remote employee benefits enrollment EMEA Q1 2024\" and passing only the filtered list of relevant source IDs. This ensures the search retrieves accurate, up-to-date results from authoritative sources while excluding outdated policy repositories."
+  },
+  {
+    "target_tools": "Sketchup Integration::create_component, Sketchup Integration::export_scene",
+    "question": "I'm working on an electrical upgrade for our manufacturing plant's Bay 3 where we need to install a new VFD junction box to control the conveyor motors. The enclosure needs to be 600mm wide x 400mm tall x 250mm deep, and I have to position it to maintain a 1-meter safety clearance from the existing conveyor line while keeping it easily accessible for maintenance. Can you help me model this custom junction box and generate a scaled drawing that shows its exact placement relative to the current equipment layout? I need to submit this for electrical permit approval and share it with our installation contractors.",
+    "metadata": {
+      "prompt_id": "00000001",
+      "row_id": 1,
+      "mode": "onet_occupation",
+      "question_gen_args": {
+        "num_tools": 2,
+        "total_prompts": 10,
+        "output_folder": "../data",
+        "job_name": null,
+        "timestamp": 1769389186,
+        "seed": null
+      },
+      "onet_soc_code": "17-3012.00",
+      "occupation_title": "Electrical and Electronics Drafters",
+      "sampled_tools": [
+        {
+          "server_idx": 686,
+          "tool_idx": 5,
+          "tool_name": "export_scene",
+          "server_name": "Sketchup Integration"
+        },
+        {
+          "server_idx": 686,
+          "tool_idx": 0,
+          "tool_name": "create_component",
+          "server_name": "Sketchup Integration"
+        }
+      ],
+      "mcp_servers": [
+        {
+          "server_id": 758,
+          "server_name": "Sketchup Integration",
+          "rank_by_usage": 759,
+          "server_info": {
+            "id": 758,
+            "name": "Sketchup Integration",
+            "author": "@BearNetwork-BRNKC/SketchUp-MCP",
+            "overview": "Connect Sketchup to Claude AI for enhanced 3D modeling and scene manipulation. Utilize prompts to create, modify, and control components directly within Sketchup, enabling advanced operations through Ruby code execution.",
+            "repository_url": "https://github.com/BearNetwork-BRNKC/SketchUp-MCP",
+            "homepage": "https://smithery.ai/server/@BearNetwork-BRNKC/SketchUp-MCP",
+            "remote_or_local": "Remote",
+            "license": "MIT",
+            "usage_count": "8",
+            "success_rate": "Not available",
+            "tags": [
+              "search",
+              "web",
+              "api",
+              "mcp"
+            ],
+            "categories": [
+              "search",
+              "api"
+            ],
+            "python_sdk": "import mcp\nfrom mcp.client.streamable_http import streamablehttp_client\nimport json\nimport base64\n\nsmithery_api_key = \"\"\nurl = f\"https://server.smithery.ai/@BearNetwork-BRNKC/SketchUp-MCP/mcp?api_key={smithery_api_key}\"\n\nasync def main():\n    # Connect to the server using HTTP client\n    async with streamablehttp_client(url) as (read_stream, write_stream, _):\n        async with mcp.ClientSession(read_stream, write_stream) as session:\n            # Initialize the connection\n            await session.initialize()\n            # List available tools\n            tools_result = await session.list_tools()\n            print(f\"Available tools: {', '.join([t.name for t in tools_result.tools])}\")\n\nif __name__ == \"__main__\":\n    import asyncio\n    asyncio.run(main())",
+            "configuration_schema": "",
+            "smithery_configuration_requirements": [],
+            "python_sdk_config": "",
+            "python_sdk_url": "https://server.smithery.ai/@BearNetwork-BRNKC/SketchUp-MCP/mcp?api_key={smithery_api_key}"
+          },
+          "remote_server_response": {
+            "url": "https://server.smithery.ai/@BearNetwork-BRNKC/SketchUp-MCP/mcp?api_key={smithery_api_key}&profile={smithery_profile}",
+            "is_success": true,
+            "error": null,
+            "tools": [
+              {
+                "name": "create_component",
+                "description": "Create a new component in Sketchup",
+                "input_schema": {
+                  "properties": {
+                    "type": {
+                      "default": "cube",
+                      "title": "Type",
+                      "type": "string"
+                    },
+                    "position": {
+                      "default": null,
+                      "items": {
+                        "type": "number"
+                      },
+                      "title": "Position",
+                      "type": "array"
+                    },
+                    "dimensions": {
+                      "default": null,
+                      "items": {
+                        "type": "number"
+                      },
+                      "title": "Dimensions",
+                      "type": "array"
+                    }
+                  },
+                  "title": "create_componentArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "delete_component",
+                "description": "Delete a component by ID",
+                "input_schema": {
+                  "properties": {
+                    "id": {
+                      "title": "Id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "title": "delete_componentArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "transform_component",
+                "description": "Transform a component's position, rotation, or scale",
+                "input_schema": {
+                  "properties": {
+                    "id": {
+                      "title": "Id",
+                      "type": "string"
+                    },
+                    "position": {
+                      "default": null,
+                      "items": {
+                        "type": "number"
+                      },
+                      "title": "Position",
+                      "type": "array"
+                    },
+                    "rotation": {
+                      "default": null,
+                      "items": {
+                        "type": "number"
+                      },
+                      "title": "Rotation",
+                      "type": "array"
+                    },
+                    "scale": {
+                      "default": null,
+                      "items": {
+                        "type": "number"
+                      },
+                      "title": "Scale",
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "title": "transform_componentArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_selection",
+                "description": "Get currently selected components",
+                "input_schema": {
+                  "properties": {},
+                  "title": "get_selectionArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "set_material",
+                "description": "Set material for a component",
+                "input_schema": {
+                  "properties": {
+                    "id": {
+                      "title": "Id",
+                      "type": "string"
+                    },
+                    "material": {
+                      "title": "Material",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "material"
+                  ],
+                  "title": "set_materialArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "export_scene",
+                "description": "Export the current scene",
+                "input_schema": {
+                  "properties": {
+                    "format": {
+                      "default": "skp",
+                      "title": "Format",
+                      "type": "string"
+                    }
+                  },
+                  "title": "export_sceneArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "create_mortise_tenon",
+                "description": "Create a mortise and tenon joint between two components",
+                "input_schema": {
+                  "properties": {
+                    "mortise_id": {
+                      "title": "Mortise Id",
+                      "type": "string"
+                    },
+                    "tenon_id": {
+                      "title": "Tenon Id",
+                      "type": "string"
+                    },
+                    "width": {
+                      "default": 1,
+                      "title": "Width",
+                      "type": "number"
+                    },
+                    "height": {
+                      "default": 1,
+                      "title": "Height",
+                      "type": "number"
+                    },
+                    "depth": {
+                      "default": 1,
+                      "title": "Depth",
+                      "type": "number"
+                    },
+                    "offset_x": {
+                      "default": 0,
+                      "title": "Offset X",
+                      "type": "number"
+                    },
+                    "offset_y": {
+                      "default": 0,
+                      "title": "Offset Y",
+                      "type": "number"
+                    },
+                    "offset_z": {
+                      "default": 0,
+                      "title": "Offset Z",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "mortise_id",
+                    "tenon_id"
+                  ],
+                  "title": "create_mortise_tenonArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "create_dovetail",
+                "description": "Create a dovetail joint between two components",
+                "input_schema": {
+                  "properties": {
+                    "tail_id": {
+                      "title": "Tail Id",
+                      "type": "string"
+                    },
+                    "pin_id": {
+                      "title": "Pin Id",
+                      "type": "string"
+                    },
+                    "width": {
+                      "default": 1,
+                      "title": "Width",
+                      "type": "number"
+                    },
+                    "height": {
+                      "default": 1,
+                      "title": "Height",
+                      "type": "number"
+                    },
+                    "depth": {
+                      "default": 1,
+                      "title": "Depth",
+                      "type": "number"
+                    },
+                    "angle": {
+                      "default": 15,
+                      "title": "Angle",
+                      "type": "number"
+                    },
+                    "num_tails": {
+                      "default": 3,
+                      "title": "Num Tails",
+                      "type": "integer"
+                    },
+                    "offset_x": {
+                      "default": 0,
+                      "title": "Offset X",
+                      "type": "number"
+                    },
+                    "offset_y": {
+                      "default": 0,
+                      "title": "Offset Y",
+                      "type": "number"
+                    },
+                    "offset_z": {
+                      "default": 0,
+                      "title": "Offset Z",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "tail_id",
+                    "pin_id"
+                  ],
+                  "title": "create_dovetailArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "create_finger_joint",
+                "description": "Create a finger joint (box joint) between two components",
+                "input_schema": {
+                  "properties": {
+                    "board1_id": {
+                      "title": "Board1 Id",
+                      "type": "string"
+                    },
+                    "board2_id": {
+                      "title": "Board2 Id",
+                      "type": "string"
+                    },
+                    "width": {
+                      "default": 1,
+                      "title": "Width",
+                      "type": "number"
+                    },
+                    "height": {
+                      "default": 1,
+                      "title": "Height",
+                      "type": "number"
+                    },
+                    "depth": {
+                      "default": 1,
+                      "title": "Depth",
+                      "type": "number"
+                    },
+                    "num_fingers": {
+                      "default": 5,
+                      "title": "Num Fingers",
+                      "type": "integer"
+                    },
+                    "offset_x": {
+                      "default": 0,
+                      "title": "Offset X",
+                      "type": "number"
+                    },
+                    "offset_y": {
+                      "default": 0,
+                      "title": "Offset Y",
+                      "type": "number"
+                    },
+                    "offset_z": {
+                      "default": 0,
+                      "title": "Offset Z",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "board1_id",
+                    "board2_id"
+                  ],
+                  "title": "create_finger_jointArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "eval_ruby",
+                "description": "Evaluate arbitrary Ruby code in Sketchup",
+                "input_schema": {
+                  "properties": {
+                    "code": {
+                      "title": "Code",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code"
+                  ],
+                  "title": "eval_rubyArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              }
+            ],
+            "tool_count": 10,
+            "tool_names": [
+              "create_component",
+              "delete_component",
+              "transform_component",
+              "get_selection",
+              "set_material",
+              "export_scene",
+              "create_mortise_tenon",
+              "create_dovetail",
+              "create_finger_joint",
+              "eval_ruby"
+            ]
+          },
+          "labels": {
+            "analysis": "The MCP Server is specialized for integrating with SketchUp, a popular 3D modeling software. Its core functionality revolves around enhancing 3D modeling capabilities by allowing users to create, modify, and manipulate 3D components through AI-driven prompts and Ruby code execution. The available tools focus on component manipulation, joint creation (like mortise and tenon, dovetail, and finger joints), and scene management, indicating a strong emphasis on advanced 3D modeling workflows.",
+            "reasoning": "The primary label is chosen because the server's main purpose is to extend SketchUp's capabilities for 3D modeling, which aligns with the \"3D Model\" category. \"Development Tools\" is a secondary label due to the server's ability to execute Ruby code, which is relevant for developers. No custom label is needed as the predefined labels adequately describe the server's functionality.",
+            "primary_label": "AI/ML Tools",
+            "secondary_labels": [
+              "Development Tools"
+            ],
+            "custom_label": null,
+            "is_connected": true,
+            "is_remote_tool_valid": false,
+            "featured_server": false
+          },
+          "original_file": "../crawler/smithery/@BearNetwork-BRNKC_SketchUp-MCP.json",
+          "source_file_path": "../mcp_servers/tf_0759.@BearNetwork-BRNKC_SketchUp-MCP_labeled.json",
+          "source_filename": "tf_0759.@BearNetwork-BRNKC_SketchUp-MCP_labeled.json",
+          "processed_timestamp": 1753731940,
+          "processing_source": "",
+          "rank": 741
+        }
+      ],
+      "synthetic_data_gen_configs": [
+        {
+          "model": "kimi-k2-thinking",
+          "generation_params": {
+            "engine": "openrouter_api",
+            "model_path": "moonshotai/kimi-k2-thinking",
+            "temperature": 1.0,
+            "max_tokens": 32768,
+            "top_p": 1.0,
+            "repetition_penalty": 1.0,
+            "num_trials": 1,
+            "step": "1.2"
+          },
+          "timestamp": 1769389649
+        }
+      ],
+      "server_count": 1
+    },
+    "min_distance": 1.2461694478988647,
+    "duplicate_count": 0,
+    "min_similar_row_id": 4,
+    "tool_analysis": "Both tools belong to the Sketchup Integration MCP Server, designed for advanced 3D modeling workflows. The **create_component** tool allows an electrical drafter to model custom electrical equipment with precise specifications, while **export_scene** generates the final deliverable showing spatial relationships. In this scenario, the drafter must first create a custom VFD junction box component with exact dimensions, then export a scaled scene that demonstrates its placement relative to existing conveyor equipment, maintaining required safety clearances for permit approval and contractor coordination.",
+    "cross_tool_workflow": "The workflow requires two sequential steps: First, the drafter uses create_component to build a custom 600mm x 400mm x 250mm VFD junction box with appropriate electrical mounting features. This component must be positioned in the 3D model to maintain a 1-meter clearance from the existing conveyor system in Bay 3 while ensuring maintenance accessibility. Second, after verifying the placement and spatial relationships within the facility model, the drafter uses export_scene to generate a scaled master sketch that shows the exact specifications and dimensions of the proposed installation relative to existing facilities. This exported scene serves as the official submission document for permit applications and contractor bidding."
+  },
+  {
+    "target_tools": "Canvas MCP::get_gradescope_course_by_name, Canvas Integration Server::call_search_gradescope",
+    "question": "I'm meeting with our special education coordinator tomorrow to discuss accommodations for the upcoming manufacturing project assessment. I need to review my \"Manufacturing Fundamentals\" course structure and pull up data on how students with IEPs performed on our hands-on projects from last semester so we can identify what modifications might be needed. Could you help me locate my course details and find that student performance information?",
+    "metadata": {
+      "prompt_id": "00000002",
+      "row_id": 2,
+      "mode": "onet_occupation",
+      "question_gen_args": {
+        "num_tools": 2,
+        "total_prompts": 10,
+        "output_folder": "../data",
+        "job_name": null,
+        "timestamp": 1769389186,
+        "seed": null
+      },
+      "onet_soc_code": "25-2023.00",
+      "occupation_title": "Career/Technical Education Teachers, Middle School",
+      "sampled_tools": [
+        {
+          "server_idx": 733,
+          "tool_idx": 9,
+          "tool_name": "get_gradescope_course_by_name",
+          "server_name": "Canvas MCP"
+        },
+        {
+          "server_idx": 811,
+          "tool_idx": 14,
+          "tool_name": "call_search_gradescope",
+          "server_name": "Canvas Integration Server"
+        }
+      ],
+      "mcp_servers": [
+        {
+          "server_id": 1019,
+          "server_name": "Canvas MCP",
+          "rank_by_usage": 1020,
+          "server_info": {
+            "id": 1019,
+            "name": "Canvas MCP",
+            "author": "@aryankeluskar/canvas-mcp",
+            "overview": "EdTech MCP. This is a collection of Canvas LMS tools for the model context protocol. Allows you to query your courses and get help for your assignments in the AI app of your choice. try now!",
+            "repository_url": "https://github.com/aryankeluskar/canvas-mcp",
+            "homepage": "https://smithery.ai/server/@aryankeluskar/canvas-mcp",
+            "remote_or_local": "Remote",
+            "license": "Smithery",
+            "usage_count": "2",
+            "success_rate": "Not available",
+            "tags": [
+              "search",
+              "web",
+              "api",
+              "mcp"
+            ],
+            "categories": [
+              "search",
+              "api"
+            ],
+            "python_sdk": "import mcp\nfrom mcp.client.streamable_http import streamablehttp_client\nimport json\nimport base64\n\nconfig = {\n  \"canvasApiKey\": \"\",\n  \"googleApiKey\": \"\",\n  \"gradescopeEmail\": \"\",\n  \"gradescopePassword\": \"\"\n}\n# Encode config in base64\nconfig_b64 = base64.b64encode(json.dumps(config).encode()).decode()\nsmithery_api_key = \"\"\n\n# Create server URL\nurl = f\"https://server.smithery.ai/@aryankeluskar/canvas-mcp/mcp?config={config_b64}&api_key={smithery_api_key}\"\n\nasync def main():\n    # Connect to the server using HTTP client\n    async with streamablehttp_client(url) as (read_stream, write_stream, _):\n        async with mcp.ClientSession(read_stream, write_stream) as session:\n            # Initialize the connection\n            await session.initialize()\n            # List available tools\n            tools_result = await session.list_tools()\n            print(f\"Available tools: {', '.join([t.name for t in tools_result.tools])}\")\n\nif __name__ == \"__main__\":\n    import asyncio\n    asyncio.run(main())",
+            "configuration_schema": "",
+            "smithery_configuration_requirements": [],
+            "python_sdk_config": "{\n  \"canvasApiKey\": \"\",\n  \"googleApiKey\": \"\",\n  \"gradescopeEmail\": \"\",\n  \"gradescopePassword\": \"\"\n}",
+            "python_sdk_url": "https://server.smithery.ai/@aryankeluskar/canvas-mcp/mcp?config={config_b64}&api_key={smithery_api_key}"
+          },
+          "remote_server_response": {
+            "url": "https://server.smithery.ai/@aryankeluskar/canvas-mcp/mcp?config=eyJjYW52YXNBcGlLZXkiOiAiIiwgImdvb2dsZUFwaUtleSI6ICIiLCAiZ3JhZGVzY29wZUVtYWlsIjogIiIsICJncmFkZXNjb3BlUGFzc3dvcmQiOiAiIn0=&api_key={smithery_api_key}&profile={smithery_profile}",
+            "is_success": true,
+            "error": null,
+            "tools": [
+              {
+                "name": "get_courses",
+                "description": "Use this tool to retrieve all available Canvas courses for the current user. This tool returns a dictionary mapping course names to their corresponding IDs. Use this when you need to find course IDs based on names, display all available courses, or when needing to access any course-related information.",
+                "input_schema": {
+                  "properties": {},
+                  "title": "get_coursesArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_modules",
+                "description": "Use this tool to retrieve all modules within a specific Canvas course. This tool returns a list of module objects containing module details like ID, name, and status. Use this when exploring or navigating course content structure.",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "course_id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id"
+                  ],
+                  "title": "get_modulesArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_module_items",
+                "description": "Use this tool to retrieve all items within a specific module in a Canvas course. This tool returns a list of module item objects containing details like title, type, and URLs. Use this when you need to access specific learning materials, assignments, or other content within a module.",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "course_id",
+                      "type": "string"
+                    },
+                    "module_id": {
+                      "title": "module_id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id",
+                    "module_id"
+                  ],
+                  "title": "get_module_itemsArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_file_url",
+                "description": "Use this tool to get the direct download URL for a file stored in Canvas. This tool returns a URL string that can be used to access or download the file. Use this when you need direct access to file content rather than just the Canvas page URL.",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "course_id",
+                      "type": "string"
+                    },
+                    "file_id": {
+                      "title": "file_id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id",
+                    "file_id"
+                  ],
+                  "title": "get_file_urlArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "find_resources",
+                "description": "Use this tool to search for and identify the most relevant learning resources across Canvas courses based on a text query or image. This tool analyzes user needs and returns resources ranked by relevance. Use this when helping users find specific learning materials, lecture notes, or content related to their questions.",
+                "input_schema": {
+                  "properties": {
+                    "query": {
+                      "title": "Query",
+                      "type": "string"
+                    },
+                    "image_path": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "title": "Image Path"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ],
+                  "title": "find_resourcesArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_course_assignments",
+                "description": "Use this tool to retrieve all assignments for a specific Canvas course, with optional filtering by status. This tool returns assignment details including name, description, due date, and submission status. Use this when helping users manage their coursework, check due dates, or find assignment details.\n    \n    Args:\n        course_id: The Canvas course ID\n        bucket: Optional filter - past, overdue, undated, ungraded, unsubmitted, upcoming, future\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "course_id",
+                      "type": "string"
+                    },
+                    "bucket": {
+                      "default": null,
+                      "title": "Bucket",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id"
+                  ],
+                  "title": "get_course_assignmentsArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_assignments_by_course_name",
+                "description": "Use this tool to retrieve all assignments for a Canvas course using its name rather than ID. This tool returns assignment details the same as get_course_assignments. Use this when you have the course name but not the ID, or when helping users find assignments across multiple courses.\n    \n    Args:\n        course_name: The name of the course as it appears in Canvas (partial matches supported)\n        bucket: Optional filter - past, overdue, undated, ungraded, unsubmitted, upcoming, future\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_name": {
+                      "title": "Course Name",
+                      "type": "string"
+                    },
+                    "bucket": {
+                      "default": null,
+                      "title": "Bucket",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_name"
+                  ],
+                  "title": "get_assignments_by_course_nameArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_canvas_courses",
+                "description": "Use this tool to retrieve all available Canvas courses for the current user. This is an alias for get_courses. Use this when you need to find course IDs based on names or display all available courses.",
+                "input_schema": {
+                  "properties": {},
+                  "title": "get_canvas_coursesArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_gradescope_courses",
+                "description": "Use this tool to retrieve all available Gradescope courses for the current user. This tool returns a dictionary of courses organized by user role. Use this when helping users access or manage their Gradescope course information.",
+                "input_schema": {
+                  "properties": {
+                    "random_string": {
+                      "default": "",
+                      "title": "Random String",
+                      "type": "string"
+                    }
+                  },
+                  "title": "get_gradescope_coursesArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_gradescope_course_by_name",
+                "description": "Use this tool to find a specific Gradescope course by name (partial matches supported). This tool returns the course object if found. Use this when you need to get course details or ID when only the name is known.\n    \n    Args:\n        course_name: The name or partial name of the Gradescope course to search for\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_name": {
+                      "title": "Course Name",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_name"
+                  ],
+                  "title": "get_gradescope_course_by_nameArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_gradescope_assignments",
+                "description": "Use this tool to retrieve all assignments for a specific Gradescope course. This tool returns a list of assignment objects with details like name, due date, and status. Use this when helping users manage their Gradescope coursework.\n    \n    Args:\n        course_id: The Gradescope course ID\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "Course Id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id"
+                  ],
+                  "title": "get_gradescope_assignmentsArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_gradescope_assignment_by_name",
+                "description": "Use this tool to find a specific Gradescope assignment by name within a course. This tool returns the assignment object if found. Use this when you need assignment details or ID when only the name and course are known.\n    \n    Args:\n        course_id: The Gradescope course ID\n        assignment_name: The name or partial name of the assignment to search for\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "Course Id",
+                      "type": "string"
+                    },
+                    "assignment_name": {
+                      "title": "Assignment Name",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id",
+                    "assignment_name"
+                  ],
+                  "title": "get_gradescope_assignment_by_nameArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_gradescope_submissions",
+                "description": "Use this tool to retrieve all submissions for a specific Gradescope assignment. This tool returns a list of submission objects with details like submission time and score. Use this when helping users review or manage submission information.\n    \n    Args:\n        course_id: The Gradescope course ID\n        assignment_id: The Gradescope assignment ID\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "Course Id",
+                      "type": "string"
+                    },
+                    "assignment_id": {
+                      "title": "Assignment Id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id",
+                    "assignment_id"
+                  ],
+                  "title": "get_gradescope_submissionsArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_gradescope_student_submission",
+                "description": "Use this tool to retrieve a specific student's submission for a Gradescope assignment. This tool returns the submission object if found. Use this when helping a student review their own submission or when an instructor needs details about a specific student's work.\n    \n    Args:\n        course_id: The Gradescope course ID\n        assignment_id: The Gradescope assignment ID\n        student_email: The email address of the student whose submission to retrieve\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "Course Id",
+                      "type": "string"
+                    },
+                    "assignment_id": {
+                      "title": "Assignment Id",
+                      "type": "string"
+                    },
+                    "student_email": {
+                      "title": "Student Email",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id",
+                    "assignment_id",
+                    "student_email"
+                  ],
+                  "title": "get_gradescope_student_submissionArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "call_search_gradescope",
+                "description": "Use this tool to search for information across Gradescope using natural language queries. This tool analyzes the query and returns relevant information about courses, assignments, or submissions. Use this when helping users find Gradescope information without knowing specific IDs or technical details.\n    \n    Args:\n        query: Natural language query about Gradescope courses, assignments, etc.\n    ",
+                "input_schema": {
+                  "properties": {
+                    "query": {
+                      "title": "Query",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ],
+                  "title": "call_search_gradescopeArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "search_education_platforms",
+                "description": "Use this tool to search for information across both Canvas and Gradescope using natural language queries. This tool determines which platform is most relevant to the query and returns appropriately formatted results. Use this for broad educational queries when the user hasn't specified which platform they're interested in.\n    \n    Args:\n        query: Natural language query about courses, assignments, or other educational content\n    ",
+                "input_schema": {
+                  "properties": {
+                    "query": {
+                      "title": "Query",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ],
+                  "title": "search_education_platformsArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              }
+            ],
+            "tool_count": 16,
+            "tool_names": [
+              "get_courses",
+              "get_modules",
+              "get_module_items",
+              "get_file_url",
+              "find_resources",
+              "get_course_assignments",
+              "get_assignments_by_course_name",
+              "get_canvas_courses",
+              "get_gradescope_courses",
+              "get_gradescope_course_by_name",
+              "get_gradescope_assignments",
+              "get_gradescope_assignment_by_name",
+              "get_gradescope_submissions",
+              "get_gradescope_student_submission",
+              "call_search_gradescope",
+              "search_education_platforms"
+            ]
+          },
+          "labels": {
+            "analysis": "The MCP Server described is focused on educational technology (EdTech), specifically integrating with Canvas LMS and Gradescope platforms. The core functionality revolves around retrieving, managing, and searching for course-related information such as courses, modules, assignments, submissions, and grades. The tools enable users to query their educational materials, access learning resources, and manage coursework efficiently within AI applications.",
+            "reasoning": "The primary functionality is centered around managing educational content and interactions within Canvas and Gradescope, hence the primary label is Education. Secondary labels like Database Operations reflect the server's ability to query and retrieve structured data, while Communication Tools highlight the user's ability to access and interact with educational resources. While it could encompass aspects of productivity or file management, the core purpose is education-focused.",
+            "primary_label": "Education",
+            "secondary_labels": [
+              "Database Operations",
+              "Communication Tools"
+            ],
+            "custom_label": "EdTech Integration",
+            "is_connected": true,
+            "is_remote_tool_valid": false,
+            "featured_server": false
+          },
+          "original_file": "../crawler/smithery/@aryankeluskar_canvas-mcp.json",
+          "source_file_path": "../mcp_servers/tf_1020.@aryankeluskar_canvas-mcp_labeled.json",
+          "source_filename": "tf_1020.@aryankeluskar_canvas-mcp_labeled.json",
+          "processed_timestamp": 1753731940,
+          "processing_source": "",
+          "rank": 998
+        },
+        {
+          "server_id": 1750,
+          "server_name": "Canvas Integration Server",
+          "rank_by_usage": 1751,
+          "server_info": {
+            "id": 1750,
+            "name": "Canvas Integration Server",
+            "author": "@jpablomm/mcp-hackathon-canvas",
+            "overview": "Enable AI agents to interact seamlessly with Canvas LMS and Gradescope by querying courses, assignments, modules, and calendar events using natural language. Access detailed breakdowns of upcoming assignments and submission statuses to streamline educational workflows. Enhance your productivity by integrating these educational platforms directly into your AI assistant environment.",
+            "repository_url": "https://github.com/jpablomm/mcp-hackathon-canvas",
+            "homepage": "https://smithery.ai/server/@jpablomm/mcp-hackathon-canvas",
+            "remote_or_local": "Remote",
+            "license": "MIT",
+            "usage_count": "Not available",
+            "success_rate": "Not available",
+            "tags": [
+              "search",
+              "web",
+              "api",
+              "mcp"
+            ],
+            "categories": [
+              "search",
+              "api"
+            ],
+            "python_sdk": "import mcp\nfrom mcp.client.streamable_http import streamablehttp_client\nimport json\nimport base64\n\nconfig = {\n  \"canvasApiKey\": \"\",\n  \"googleApiKey\": \"\",\n  \"gradescopeEmail\": \"\",\n  \"gradescopePassword\": \"\"\n}\n# Encode config in base64\nconfig_b64 = base64.b64encode(json.dumps(config).encode()).decode()\nsmithery_api_key = \"\"\n\n# Create server URL\nurl = f\"https://server.smithery.ai/@jpablomm/mcp-hackathon-canvas/mcp?config={config_b64}&api_key={smithery_api_key}\"\n\nasync def main():\n    # Connect to the server using HTTP client\n    async with streamablehttp_client(url) as (read_stream, write_stream, _):\n        async with mcp.ClientSession(read_stream, write_stream) as session:\n            # Initialize the connection\n            await session.initialize()\n            # List available tools\n            tools_result = await session.list_tools()\n            print(f\"Available tools: {', '.join([t.name for t in tools_result.tools])}\")\n\nif __name__ == \"__main__\":\n    import asyncio\n    asyncio.run(main())",
+            "configuration_schema": "",
+            "smithery_configuration_requirements": [],
+            "python_sdk_config": "{\n  \"canvasApiKey\": \"\",\n  \"googleApiKey\": \"\",\n  \"gradescopeEmail\": \"\",\n  \"gradescopePassword\": \"\"\n}",
+            "python_sdk_url": "https://server.smithery.ai/@jpablomm/mcp-hackathon-canvas/mcp?config={config_b64}&api_key={smithery_api_key}"
+          },
+          "remote_server_response": {
+            "url": "https://server.smithery.ai/@jpablomm/mcp-hackathon-canvas/mcp?config=eyJjYW52YXNBcGlLZXkiOiAiIiwgImdvb2dsZUFwaUtleSI6ICIiLCAiZ3JhZGVzY29wZUVtYWlsIjogIiIsICJncmFkZXNjb3BlUGFzc3dvcmQiOiAiIn0=&api_key={smithery_api_key}&profile={smithery_profile}",
+            "is_success": true,
+            "error": null,
+            "tools": [
+              {
+                "name": "get_courses",
+                "description": "Use this tool to retrieve all available Canvas courses for the current user. This tool returns a dictionary mapping course names to their corresponding IDs. Use this when you need to find course IDs based on names, display all available courses, or when needing to access any course-related information.",
+                "input_schema": {
+                  "properties": {},
+                  "title": "get_coursesArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_modules",
+                "description": "Use this tool to retrieve all modules within a specific Canvas course. This tool returns a list of module objects containing module details like ID, name, and status. Use this when exploring or navigating course content structure.",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "course_id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id"
+                  ],
+                  "title": "get_modulesArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_module_items",
+                "description": "Use this tool to retrieve all items within a specific module in a Canvas course. This tool returns a list of module item objects containing details like title, type, and URLs. Use this when you need to access specific learning materials, assignments, or other content within a module.",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "course_id",
+                      "type": "string"
+                    },
+                    "module_id": {
+                      "title": "module_id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id",
+                    "module_id"
+                  ],
+                  "title": "get_module_itemsArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_file_url",
+                "description": "Use this tool to get the direct download URL for a file stored in Canvas. This tool returns a URL string that can be used to access or download the file. Use this when you need direct access to file content rather than just the Canvas page URL.",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "course_id",
+                      "type": "string"
+                    },
+                    "file_id": {
+                      "title": "file_id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id",
+                    "file_id"
+                  ],
+                  "title": "get_file_urlArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "find_resources",
+                "description": "Use this tool to search for and identify the most relevant learning resources across Canvas courses based on a text query or image. This tool analyzes user needs and returns resources ranked by relevance. Use this when helping users find specific learning materials, lecture notes, or content related to their questions.",
+                "input_schema": {
+                  "properties": {
+                    "query": {
+                      "title": "Query",
+                      "type": "string"
+                    },
+                    "image_path": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "title": "Image Path"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ],
+                  "title": "find_resourcesArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_course_assignments",
+                "description": "Use this tool to retrieve all assignments for a specific Canvas course, with optional filtering by status. This tool returns assignment details including name, description, due date, and submission status. Use this when helping users manage their coursework, check due dates, or find assignment details.\n\n    Args:\n        course_id: The Canvas course ID\n        bucket: Optional filter - past, overdue, undated, ungraded, unsubmitted, upcoming, future\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "course_id",
+                      "type": "string"
+                    },
+                    "bucket": {
+                      "default": null,
+                      "title": "Bucket",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id"
+                  ],
+                  "title": "get_course_assignmentsArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_assignments_by_course_name",
+                "description": "Use this tool to retrieve all assignments for a Canvas course using its name rather than ID. This tool returns assignment details the same as get_course_assignments. Use this when you have the course name but not the ID, or when helping users find assignments across multiple courses.\n\n    Args:\n        course_name: The name of the course as it appears in Canvas (partial matches supported)\n        bucket: Optional filter - past, overdue, undated, ungraded, unsubmitted, upcoming, future\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_name": {
+                      "title": "Course Name",
+                      "type": "string"
+                    },
+                    "bucket": {
+                      "default": null,
+                      "title": "Bucket",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_name"
+                  ],
+                  "title": "get_assignments_by_course_nameArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_canvas_courses",
+                "description": "Use this tool to retrieve all available Canvas courses for the current user. This is an alias for get_courses. Use this when you need to find course IDs based on names or display all available courses.",
+                "input_schema": {
+                  "properties": {},
+                  "title": "get_canvas_coursesArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_gradescope_courses",
+                "description": "Use this tool to retrieve all available Gradescope courses for the current user. This tool returns a dictionary of courses organized by user role. Use this when helping users access or manage their Gradescope course information.",
+                "input_schema": {
+                  "properties": {
+                    "random_string": {
+                      "default": "",
+                      "title": "Random String",
+                      "type": "string"
+                    }
+                  },
+                  "title": "get_gradescope_coursesArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_gradescope_course_by_name",
+                "description": "Use this tool to find a specific Gradescope course by name (partial matches supported). This tool returns the course object if found. Use this when you need to get course details or ID when only the name is known.\n\n    Args:\n        course_name: The name or partial name of the Gradescope course to search for\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_name": {
+                      "title": "Course Name",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_name"
+                  ],
+                  "title": "get_gradescope_course_by_nameArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_gradescope_assignments",
+                "description": "Use this tool to retrieve all assignments for a specific Gradescope course. This tool returns a list of assignment objects with details like name, due date, and status. Use this when helping users manage their Gradescope coursework.\n\n    Args:\n        course_id: The Gradescope course ID\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "Course Id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id"
+                  ],
+                  "title": "get_gradescope_assignmentsArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_gradescope_assignment_by_name",
+                "description": "Use this tool to find a specific Gradescope assignment by name within a course. This tool returns the assignment object if found. Use this when you need assignment details or ID when only the name and course are known.\n\n    Args:\n        course_id: The Gradescope course ID\n        assignment_name: The name or partial name of the assignment to search for\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "Course Id",
+                      "type": "string"
+                    },
+                    "assignment_name": {
+                      "title": "Assignment Name",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id",
+                    "assignment_name"
+                  ],
+                  "title": "get_gradescope_assignment_by_nameArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_gradescope_submissions",
+                "description": "Use this tool to retrieve all submissions for a specific Gradescope assignment. This tool returns a list of submission objects with details like submission time and score. Use this when helping users review or manage submission information.\n\n    Args:\n        course_id: The Gradescope course ID\n        assignment_id: The Gradescope assignment ID\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "Course Id",
+                      "type": "string"
+                    },
+                    "assignment_id": {
+                      "title": "Assignment Id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id",
+                    "assignment_id"
+                  ],
+                  "title": "get_gradescope_submissionsArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "get_gradescope_student_submission",
+                "description": "Use this tool to retrieve a specific student's submission for a Gradescope assignment. This tool returns the submission object if found. Use this when helping a student review their own submission or when an instructor needs details about a specific student's work.\n\n    Args:\n        course_id: The Gradescope course ID\n        assignment_id: The Gradescope assignment ID\n        student_email: The email address of the student whose submission to retrieve\n    ",
+                "input_schema": {
+                  "properties": {
+                    "course_id": {
+                      "title": "Course Id",
+                      "type": "string"
+                    },
+                    "assignment_id": {
+                      "title": "Assignment Id",
+                      "type": "string"
+                    },
+                    "student_email": {
+                      "title": "Student Email",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "course_id",
+                    "assignment_id",
+                    "student_email"
+                  ],
+                  "title": "get_gradescope_student_submissionArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "call_search_gradescope",
+                "description": "Use this tool to search for information across Gradescope using natural language queries. This tool analyzes the query and returns relevant information about courses, assignments, or submissions. Use this when helping users find Gradescope information without knowing specific IDs or technical details.\n\n    Args:\n        query: Natural language query about Gradescope courses, assignments, etc.\n    ",
+                "input_schema": {
+                  "properties": {
+                    "query": {
+                      "title": "Query",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ],
+                  "title": "call_search_gradescopeArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              },
+              {
+                "name": "search_education_platforms",
+                "description": "Use this tool to search for information across both Canvas and Gradescope using natural language queries. This tool determines which platform is most relevant to the query and returns appropriately formatted results. Use this for broad educational queries when the user hasn't specified which platform they're interested in.\n\n    Args:\n        query: Natural language query about courses, assignments, or other educational content\n    ",
+                "input_schema": {
+                  "properties": {
+                    "query": {
+                      "title": "Query",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ],
+                  "title": "search_education_platformsArguments",
+                  "type": "object"
+                },
+                "annotations": {}
+              }
+            ],
+            "tool_count": 16,
+            "tool_names": [
+              "get_courses",
+              "get_modules",
+              "get_module_items",
+              "get_file_url",
+              "find_resources",
+              "get_course_assignments",
+              "get_assignments_by_course_name",
+              "get_canvas_courses",
+              "get_gradescope_courses",
+              "get_gradescope_course_by_name",
+              "get_gradescope_assignments",
+              "get_gradescope_assignment_by_name",
+              "get_gradescope_submissions",
+              "get_gradescope_student_submission",
+              "call_search_gradescope",
+              "search_education_platforms"
+            ]
+          },
+          "labels": {
+            "analysis": "The MCP Server is a specialized educational tool designed to integrate with Canvas LMS and Gradescope platforms. Its core functionality revolves around querying, managing, and retrieving educational content, assignments, and student/submission information through natural language interactions. The server enables users to streamline their educational workflows by providing access to course materials, assignment details, grades, and submission statuses without requiring direct knowledge of platform-specific technical details.",
+            "reasoning": "The primary label \"Education\" was chosen because the server's tools are explicitly focused on managing educational content and workflows within learning management systems. The secondary labels \"Database Operations\" and \"API Integration\" were selected because the server performs extensive data querying and interacts with third-party educational platforms through API calls. A custom label was not deemed necessary as the functionality is well-captured by the predefined categories.",
+            "primary_label": "Education",
+            "secondary_labels": [
+              "Database Operations",
+              "API Integration"
+            ],
+            "custom_label": null,
+            "is_connected": true,
+            "is_remote_tool_valid": false,
+            "featured_server": false
+          },
+          "original_file": "../crawler/smithery/@jpablomm_mcp-hackathon-canvas.json",
+          "source_file_path": "../mcp_servers/tf_1751.@jpablomm_mcp-hackathon-canvas_labeled.json",
+          "source_filename": "tf_1751.@jpablomm_mcp-hackathon-canvas_labeled.json",
+          "processed_timestamp": 1753731940,
+          "processing_source": "",
+          "rank": 1569
+        }
+      ],
+      "synthetic_data_gen_configs": [
+        {
+          "model": "kimi-k2-thinking",
+          "generation_params": {
+            "engine": "openrouter_api",
+            "model_path": "moonshotai/kimi-k2-thinking",
+            "temperature": 1.0,
+            "max_tokens": 32768,
+            "top_p": 1.0,
+            "repetition_penalty": 1.0,
+            "num_trials": 1,
+            "step": "1.2"
+          },
+          "timestamp": 1769389649
+        }
+      ],
+      "server_count": 2
+    },
+    "min_distance": 1.3784884214401245,
+    "duplicate_count": 0,
+    "min_similar_row_id": 6,
+    "tool_analysis": "The two Gradescope tools complement each other by combining precise course identification with flexible data exploration. The `get_gradescope_course_by_name` tool provides targeted course verification and structure details when the exact course name is known, which is essential for teachers managing multiple sections. The `call_search_gradescope` tool enables natural language querying across assignments and submissions, supporting deeper analysis of student performance patterns. Together, they create a powerful workflow where educators can first confirm they're working with the correct course context, then perform nuanced searches for student data, accommodation effectiveness, or assignment patterns—critical for collaborative planning and evidence-based instructional decisions.",
+    "cross_tool_workflow": "The teacher needs to prepare for a special education collaboration meeting by first verifying their course structure. Using `get_gradescope_course_by_name`, they locate \"Manufacturing Fundamentals\" to confirm course details and organization. With this course context established, they then use `call_search_gradescope` to search for historical performance data on IEP students' hands-on project submissions from the previous semester. This two-step approach ensures they're analyzing the correct course data and can extract specific insights about accommodation needs and assignment modifications for future assessments."
+  },
+  {
+    "target_tools": "KiCad MCP Server::analyze_project_circuit_patterns, KiCad MCP Server::identify_circuit_patterns",
+    "question": "I'm troubleshooting a critical power issue in a subway train's traction control unit where the 3.3V logic supply is dropping out intermittently, causing communication errors on the CAN bus. I've got the complete KiCad project archive but need to quickly locate the switching regulator circuit responsible for generating that rail. What's the best way to first scan the entire project to find schematics containing power supply circuits, then drill down into the specific schematic to identify the regulator IC, its feedback network, and any protection components so I can isolate and repair the faulty section?",
+    "metadata": {
+      "prompt_id": "00000003",
+      "row_id": 3,
+      "mode": "onet_occupation",
+      "question_gen_args": {
+        "num_tools": 2,
+        "total_prompts": 10,
+        "output_folder": "../data",
+        "job_name": null,
+        "timestamp": 1769389186,
+        "seed": null
+      },
+      "onet_soc_code": "49-2093.00",
+      "occupation_title": "Electrical and Electronics Installers and Repairers, Transportation Equipment",
+      "sampled_tools": [
+        {
+          "server_idx": 755,
+          "tool_idx": 15,
+          "tool_name": "analyze_project_circuit_patterns",
+          "server_name": "KiCad MCP Server"
+        },
+        {
+          "server_idx": 755,
+          "tool_idx": 14,
+          "tool_name": "identify_circuit_patterns",
+          "server_name": "KiCad MCP Server"
+        }
+      ],
+      "mcp_servers": [
+        {
+          "server_id": 1127,
+          "server_name": "KiCad MCP Server",
+          "rank_by_usage": 1128,
+          "server_info": {
+            "id": 1127,
+            "name": "KiCad MCP Server",
+            "author": "@lamaalrajih/kicad-mcp",
+            "overview": "Set up a server to enhance your KiCad experience. Manage projects, run design rule checks, and visualize PCB layouts seamlessly with any MCP-compliant client. Streamline your PCB design workflow and troubleshoot issues effectively.",
+            "repository_url": "https://github.com/lamaalrajih/kicad-mcp",
+            "homepage": "https://smithery.ai/server/@lamaalrajih/kicad-mcp",
+            "remote_or_local": "Remote",
+            "license": "Smithery",
+            "usage_count": "1",
+            "success_rate": "Not available",
+            "tags": [
+              "search",
+              "web",
+              "api",
+              "mcp"
+            ],
+            "categories": [
+              "search",
+              "api"
+            ],
+            "python_sdk": "import mcp\nfrom mcp.client.streamable_http import streamablehttp_client\nimport json\nimport base64\n\nsmithery_api_key = \"\"\nurl = f\"https://server.smithery.ai/@lamaalrajih/kicad-mcp/mcp?api_key={smithery_api_key}\"\n\nasync def main():\n    # Connect to the server using HTTP client\n    async with streamablehttp_client(url) as (read_stream, write_stream, _):\n        async with mcp.ClientSession(read_stream, write_stream) as session:\n            # Initialize the connection\n            await session.initialize()\n            # List available tools\n            tools_result = await session.list_tools()\n            print(f\"Available tools: {', '.join([t.name for t in tools_result.tools])}\")\n\nif __name__ == \"__main__\":\n    import asyncio\n    asyncio.run(main())",
+            "configuration_schema": "",
+            "smithery_configuration_requirements": [],
+            "python_sdk_config": "",
+            "python_sdk_url": "https://server.smithery.ai/@lamaalrajih/kicad-mcp/mcp?api_key={smithery_api_key}"
+          },
+          "remote_server_response": {
+            "url": "https://server.smithery.ai/@lamaalrajih/kicad-mcp/mcp?api_key={smithery_api_key}&profile={smithery_profile}",
+            "is_success": true,
+            "error": null,
+            "tools": [
+              {
+                "name": "list_projects",
+                "description": "Find and list all KiCad projects on this system.",
+                "input_schema": {
+                  "properties": {},
+                  "title": "list_projectsArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_project_structure",
+                "description": "Get the structure and files of a KiCad project.",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "get_project_structureArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "open_project",
+                "description": "Open a KiCad project in KiCad.",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "open_projectArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "validate_project",
+                "description": "Basic validation of a KiCad project.",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "validate_projectArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "generate_pcb_thumbnail",
+                "description": "Generate a thumbnail image of a KiCad PCB layout using kicad-cli.\n\n        Args:\n            project_path: Path to the KiCad project file (.kicad_pro)\n            ctx: Context for MCP communication\n\n        Returns:\n            Thumbnail image of the PCB or None if generation failed\n        ",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "generate_pcb_thumbnailArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "generate_project_thumbnail",
+                "description": "Generate a thumbnail of a KiCad project's PCB layout (Alias for generate_pcb_thumbnail).",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "generate_project_thumbnailArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_drc_history_tool",
+                "description": "Get the DRC check history for a KiCad project.\n        \n        Args:\n            project_path: Path to the KiCad project file (.kicad_pro)\n            \n        Returns:\n            Dictionary with DRC history entries\n        ",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "get_drc_history_toolArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "run_drc_check",
+                "description": "Run a Design Rule Check on a KiCad PCB file.\n        \n        Args:\n            project_path: Path to the KiCad project file (.kicad_pro)\n            ctx: MCP context for progress reporting\n            \n        Returns:\n            Dictionary with DRC results and statistics\n        ",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "run_drc_checkArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "analyze_bom",
+                "description": "Analyze a KiCad project's Bill of Materials.\n        \n        This tool will look for BOM files related to a KiCad project and provide\n        analysis including component counts, categories, and cost estimates if available.\n        \n        Args:\n            project_path: Path to the KiCad project file (.kicad_pro)\n            ctx: MCP context for progress reporting\n            \n        Returns:\n            Dictionary with BOM analysis results\n        ",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "analyze_bomArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "export_bom_csv",
+                "description": "Export a Bill of Materials for a KiCad project.\n        \n        This tool attempts to generate a CSV BOM file for a KiCad project.\n        It requires KiCad to be installed with the appropriate command-line tools.\n        \n        Args:\n            project_path: Path to the KiCad project file (.kicad_pro)\n            ctx: MCP context for progress reporting\n            \n        Returns:\n            Dictionary with export results\n        ",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "export_bom_csvArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "extract_schematic_netlist",
+                "description": "Extract netlist information from a KiCad schematic.\n        \n        This tool parses a KiCad schematic file and extracts comprehensive\n        netlist information including components, connections, and labels.\n        \n        Args:\n            schematic_path: Path to the KiCad schematic file (.kicad_sch)\n            ctx: MCP context for progress reporting\n            \n        Returns:\n            Dictionary with netlist information\n        ",
+                "input_schema": {
+                  "properties": {
+                    "schematic_path": {
+                      "title": "Schematic Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schematic_path"
+                  ],
+                  "title": "extract_schematic_netlistArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "extract_project_netlist",
+                "description": "Extract netlist from a KiCad project's schematic.\n        \n        This tool finds the schematic associated with a KiCad project\n        and extracts its netlist information.\n        \n        Args:\n            project_path: Path to the KiCad project file (.kicad_pro)\n            ctx: MCP context for progress reporting\n            \n        Returns:\n            Dictionary with netlist information\n        ",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "extract_project_netlistArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "analyze_schematic_connections",
+                "description": "Analyze connections in a KiCad schematic.\n        \n        This tool provides detailed analysis of component connections,\n        including power nets, signal paths, and potential issues.\n        \n        Args:\n            schematic_path: Path to the KiCad schematic file (.kicad_sch)\n            ctx: MCP context for progress reporting\n            \n        Returns:\n            Dictionary with connection analysis\n        ",
+                "input_schema": {
+                  "properties": {
+                    "schematic_path": {
+                      "title": "Schematic Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schematic_path"
+                  ],
+                  "title": "analyze_schematic_connectionsArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "find_component_connections",
+                "description": "Find all connections for a specific component in a KiCad project.\n        \n        This tool extracts information about how a specific component\n        is connected to other components in the schematic.\n        \n        Args:\n            project_path: Path to the KiCad project file (.kicad_pro)\n            component_ref: Component reference (e.g., \"R1\", \"U3\")\n            ctx: MCP context for progress reporting\n            \n        Returns:\n            Dictionary with component connection information\n        ",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    },
+                    "component_ref": {
+                      "title": "Component Ref",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path",
+                    "component_ref"
+                  ],
+                  "title": "find_component_connectionsArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "identify_circuit_patterns",
+                "description": "Identify common circuit patterns in a KiCad schematic.\n        \n        This tool analyzes a schematic to recognize common circuit blocks such as:\n        - Power supply circuits (linear regulators, switching converters)\n        - Amplifier circuits (op-amps, transistor amplifiers)\n        - Filter circuits (RC, LC, active filters)\n        - Digital interfaces (I2C, SPI, UART)\n        - Microcontroller circuits\n        - And more\n        \n        Args:\n            schematic_path: Path to the KiCad schematic file (.kicad_sch)\n            ctx: MCP context for progress reporting\n            \n        Returns:\n            Dictionary with identified circuit patterns\n        ",
+                "input_schema": {
+                  "properties": {
+                    "schematic_path": {
+                      "title": "Schematic Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schematic_path"
+                  ],
+                  "title": "identify_circuit_patternsArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "analyze_project_circuit_patterns",
+                "description": "Identify circuit patterns in a KiCad project's schematic.\n        \n        Args:\n            project_path: Path to the KiCad project file (.kicad_pro)\n            ctx: MCP context for progress reporting\n            \n        Returns:\n            Dictionary with identified circuit patterns\n        ",
+                "input_schema": {
+                  "properties": {
+                    "project_path": {
+                      "title": "Project Path",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project_path"
+                  ],
+                  "title": "analyze_project_circuit_patternsArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              }
+            ],
+            "tool_count": 16,
+            "tool_names": [
+              "list_projects",
+              "get_project_structure",
+              "open_project",
+              "validate_project",
+              "generate_pcb_thumbnail",
+              "generate_project_thumbnail",
+              "get_drc_history_tool",
+              "run_drc_check",
+              "analyze_bom",
+              "export_bom_csv",
+              "extract_schematic_netlist",
+              "extract_project_netlist",
+              "analyze_schematic_connections",
+              "find_component_connections",
+              "identify_circuit_patterns",
+              "analyze_project_circuit_patterns"
+            ]
+          },
+          "labels": {
+            "analysis": "The KiCad MCP Server is designed to enhance the workflow for PCB design using the KiCad software suite. It provides tools for project management, schematic analysis, and PCB layout verification. Key functionalities include listing and validating projects, generating visual thumbnails, running design rule checks (DRC), analyzing bill of materials (BOM), extracting netlists, and identifying common circuit patterns. The server appears to act as an intermediary that automates and streamlines various aspects of the PCB design process, making it particularly useful for electronic engineers and hardware developers.",
+            "reasoning": "The primary label \"Electrical Engineering Tools\" was chosen because the server's core functionality revolves around PCB design, schematic analysis, and hardware-related tasks. This is not covered by the predefined categories, hence the creation of a custom label. Secondary labels like \"File Management\" and \"Data Analysis & Processing\" were added because the tools handle project files and perform analysis on schematic and BOM data. No predefined secondary labels were a perfect fit, but these came closest to representing additional aspects of the server's functionality.",
+            "primary_label": "Others",
+            "secondary_labels": [
+              "File Management",
+              "Data Analysis & Processing"
+            ],
+            "custom_label": "Electrical Engineering Tools",
+            "is_connected": true,
+            "is_remote_tool_valid": false,
+            "featured_server": false
+          },
+          "original_file": "../crawler/smithery/@lamaalrajih_kicad-mcp.json",
+          "source_file_path": "../mcp_servers/tf_1128.@lamaalrajih_kicad-mcp_labeled.json",
+          "source_filename": "tf_1128.@lamaalrajih_kicad-mcp_labeled.json",
+          "processed_timestamp": 1753731940,
+          "processing_source": "",
+          "rank": 1105
+        }
+      ],
+      "synthetic_data_gen_configs": [
+        {
+          "model": "kimi-k2-thinking",
+          "generation_params": {
+            "engine": "openrouter_api",
+            "model_path": "moonshotai/kimi-k2-thinking",
+            "temperature": 1.0,
+            "max_tokens": 32768,
+            "top_p": 1.0,
+            "repetition_penalty": 1.0,
+            "num_trials": 1,
+            "step": "1.2"
+          },
+          "timestamp": 1769389649
+        }
+      ],
+      "server_count": 1
+    },
+    "min_distance": 1.074997901916504,
+    "duplicate_count": 0,
+    "min_similar_row_id": 9,
+    "tool_analysis": "The two tools from the KiCad MCP Server complement each other by providing circuit pattern identification at different hierarchical levels. The project-level analyzer scans all schematics within a KiCad project to identify which sheets contain specific circuit types, enabling technicians to quickly locate relevant subsystems in complex transportation equipment designs. The schematic-level analyzer then performs deep examination of individual schematic files, recognizing standard circuit blocks like switching regulators, amplifiers, and protection circuits with component-level detail. Together, they create a systematic troubleshooting workflow where technicians first navigate complex multi-sheet designs to isolate the relevant schematic, then conduct detailed analysis to identify test points and locate faulty components for repair.",
+    "cross_tool_workflow": "The technician begins by using the project-level analysis tool to scan the entire KiCad project (.kicad_pro) for power supply circuit patterns across all schematic sheets. This identifies which specific schematic file contains the switching regulator responsible for the 3.3V rail. Once the target schematic is located, the technician uses the schematic-level analysis tool on that individual .kicad_sch file to obtain detailed identification of the regulator circuit block, including the regulator IC, feedback resistor network, input/output filtering capacitors, and protection components like fuses or TVS diodes. This two-tier approach transforms a broad system-level problem into an actionable component-level repair plan, allowing the technician to physically locate and test the exact components causing the intermittent voltage drop."
+  },
+  {
+    "target_tools": "Sketchup Integration::create_dovetail, Toolbox::use_tool",
+    "question": "I'm setting up a job to machine an inspection fixture for our QC department. The fixture has a dovetail joint that needs to be 30mm wide, 10mm deep, with a 55-degree included angle, and must hold a tolerance of ±0.02mm in 1018 steel. Before I commit to cutting, I need to model this dovetail in 3D to make sure it'll mate properly with our gauge block holder. After that checks out, I need to figure out the right feeds, speeds, and depth of cut for machining this on our vertical CNC mill using a 20mm carbide dovetail cutter. Our shop standard is to optimize for surface finish since it's a precision fixture. Can you help me with the 3D modeling and get me the machining parameters?",
+    "metadata": {
+      "prompt_id": "00000004",
+      "row_id": 4,
+      "mode": "onet_occupation",
+      "question_gen_args": {
+        "num_tools": 2,
+        "total_prompts": 10,
+        "output_folder": "../data",
+        "job_name": null,
+        "timestamp": 1769389186,
+        "seed": null
+      },
+      "onet_soc_code": "51-4035.00",
+      "occupation_title": "Milling and Planing Machine Setters, Operators, and Tenders, Metal and Plastic",
+      "sampled_tools": [
+        {
+          "server_idx": 708,
+          "tool_idx": 7,
+          "tool_name": "create_dovetail",
+          "server_name": "Sketchup Integration"
+        },
+        {
+          "server_idx": 572,
+          "tool_idx": 1,
+          "tool_name": "use_tool",
+          "server_name": "Toolbox"
+        }
+      ],
+      "mcp_servers": [
+        {
+          "server_id": 906,
+          "server_name": "Sketchup Integration",
+          "rank_by_usage": 907,
+          "server_info": {
+            "id": 906,
+            "name": "Sketchup Integration",
+            "author": "@mhyrr/sketchup-mcp",
+            "overview": "Connect Claude AI to Sketchup for prompt-assisted 3D modeling and scene manipulation. Control components, materials, and execute Ruby code directly within Sketchup to enhance your design workflow.",
+            "repository_url": "https://github.com/mhyrr/sketchup-mcp",
+            "homepage": "https://smithery.ai/server/@mhyrr/sketchup-mcp",
+            "remote_or_local": "Remote",
+            "license": "Smithery",
+            "usage_count": "4",
+            "success_rate": "Not available",
+            "tags": [
+              "search",
+              "web",
+              "api",
+              "mcp"
+            ],
+            "categories": [
+              "search",
+              "api"
+            ],
+            "python_sdk": "import mcp\nfrom mcp.client.streamable_http import streamablehttp_client\nimport json\nimport base64\n\nsmithery_api_key = \"\"\nurl = f\"https://server.smithery.ai/@mhyrr/sketchup-mcp/mcp?api_key={smithery_api_key}\"\n\nasync def main():\n    # Connect to the server using HTTP client\n    async with streamablehttp_client(url) as (read_stream, write_stream, _):\n        async with mcp.ClientSession(read_stream, write_stream) as session:\n            # Initialize the connection\n            await session.initialize()\n            # List available tools\n            tools_result = await session.list_tools()\n            print(f\"Available tools: {', '.join([t.name for t in tools_result.tools])}\")\n\nif __name__ == \"__main__\":\n    import asyncio\n    asyncio.run(main())",
+            "configuration_schema": "",
+            "smithery_configuration_requirements": [],
+            "python_sdk_config": "",
+            "python_sdk_url": "https://server.smithery.ai/@mhyrr/sketchup-mcp/mcp?api_key={smithery_api_key}"
+          },
+          "remote_server_response": {
+            "url": "https://server.smithery.ai/@mhyrr/sketchup-mcp/mcp?api_key={smithery_api_key}&profile={smithery_profile}",
+            "is_success": true,
+            "error": null,
+            "tools": [
+              {
+                "name": "create_component",
+                "description": "Create a new component in Sketchup",
+                "input_schema": {
+                  "properties": {
+                    "type": {
+                      "default": "cube",
+                      "title": "Type",
+                      "type": "string"
+                    },
+                    "position": {
+                      "default": null,
+                      "items": {
+                        "type": "number"
+                      },
+                      "title": "Position",
+                      "type": "array"
+                    },
+                    "dimensions": {
+                      "default": null,
+                      "items": {
+                        "type": "number"
+                      },
+                      "title": "Dimensions",
+                      "type": "array"
+                    }
+                  },
+                  "title": "create_componentArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "delete_component",
+                "description": "Delete a component by ID",
+                "input_schema": {
+                  "properties": {
+                    "id": {
+                      "title": "Id",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "title": "delete_componentArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "transform_component",
+                "description": "Transform a component's position, rotation, or scale",
+                "input_schema": {
+                  "properties": {
+                    "id": {
+                      "title": "Id",
+                      "type": "string"
+                    },
+                    "position": {
+                      "default": null,
+                      "items": {
+                        "type": "number"
+                      },
+                      "title": "Position",
+                      "type": "array"
+                    },
+                    "rotation": {
+                      "default": null,
+                      "items": {
+                        "type": "number"
+                      },
+                      "title": "Rotation",
+                      "type": "array"
+                    },
+                    "scale": {
+                      "default": null,
+                      "items": {
+                        "type": "number"
+                      },
+                      "title": "Scale",
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "title": "transform_componentArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "get_selection",
+                "description": "Get currently selected components",
+                "input_schema": {
+                  "properties": {},
+                  "title": "get_selectionArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "set_material",
+                "description": "Set material for a component",
+                "input_schema": {
+                  "properties": {
+                    "id": {
+                      "title": "Id",
+                      "type": "string"
+                    },
+                    "material": {
+                      "title": "Material",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "material"
+                  ],
+                  "title": "set_materialArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "export_scene",
+                "description": "Export the current scene",
+                "input_schema": {
+                  "properties": {
+                    "format": {
+                      "default": "skp",
+                      "title": "Format",
+                      "type": "string"
+                    }
+                  },
+                  "title": "export_sceneArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "create_mortise_tenon",
+                "description": "Create a mortise and tenon joint between two components",
+                "input_schema": {
+                  "properties": {
+                    "mortise_id": {
+                      "title": "Mortise Id",
+                      "type": "string"
+                    },
+                    "tenon_id": {
+                      "title": "Tenon Id",
+                      "type": "string"
+                    },
+                    "width": {
+                      "default": 1,
+                      "title": "Width",
+                      "type": "number"
+                    },
+                    "height": {
+                      "default": 1,
+                      "title": "Height",
+                      "type": "number"
+                    },
+                    "depth": {
+                      "default": 1,
+                      "title": "Depth",
+                      "type": "number"
+                    },
+                    "offset_x": {
+                      "default": 0,
+                      "title": "Offset X",
+                      "type": "number"
+                    },
+                    "offset_y": {
+                      "default": 0,
+                      "title": "Offset Y",
+                      "type": "number"
+                    },
+                    "offset_z": {
+                      "default": 0,
+                      "title": "Offset Z",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "mortise_id",
+                    "tenon_id"
+                  ],
+                  "title": "create_mortise_tenonArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "create_dovetail",
+                "description": "Create a dovetail joint between two components",
+                "input_schema": {
+                  "properties": {
+                    "tail_id": {
+                      "title": "Tail Id",
+                      "type": "string"
+                    },
+                    "pin_id": {
+                      "title": "Pin Id",
+                      "type": "string"
+                    },
+                    "width": {
+                      "default": 1,
+                      "title": "Width",
+                      "type": "number"
+                    },
+                    "height": {
+                      "default": 1,
+                      "title": "Height",
+                      "type": "number"
+                    },
+                    "depth": {
+                      "default": 1,
+                      "title": "Depth",
+                      "type": "number"
+                    },
+                    "angle": {
+                      "default": 15,
+                      "title": "Angle",
+                      "type": "number"
+                    },
+                    "num_tails": {
+                      "default": 3,
+                      "title": "Num Tails",
+                      "type": "integer"
+                    },
+                    "offset_x": {
+                      "default": 0,
+                      "title": "Offset X",
+                      "type": "number"
+                    },
+                    "offset_y": {
+                      "default": 0,
+                      "title": "Offset Y",
+                      "type": "number"
+                    },
+                    "offset_z": {
+                      "default": 0,
+                      "title": "Offset Z",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "tail_id",
+                    "pin_id"
+                  ],
+                  "title": "create_dovetailArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "create_finger_joint",
+                "description": "Create a finger joint (box joint) between two components",
+                "input_schema": {
+                  "properties": {
+                    "board1_id": {
+                      "title": "Board1 Id",
+                      "type": "string"
+                    },
+                    "board2_id": {
+                      "title": "Board2 Id",
+                      "type": "string"
+                    },
+                    "width": {
+                      "default": 1,
+                      "title": "Width",
+                      "type": "number"
+                    },
+                    "height": {
+                      "default": 1,
+                      "title": "Height",
+                      "type": "number"
+                    },
+                    "depth": {
+                      "default": 1,
+                      "title": "Depth",
+                      "type": "number"
+                    },
+                    "num_fingers": {
+                      "default": 5,
+                      "title": "Num Fingers",
+                      "type": "integer"
+                    },
+                    "offset_x": {
+                      "default": 0,
+                      "title": "Offset X",
+                      "type": "number"
+                    },
+                    "offset_y": {
+                      "default": 0,
+                      "title": "Offset Y",
+                      "type": "number"
+                    },
+                    "offset_z": {
+                      "default": 0,
+                      "title": "Offset Z",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "board1_id",
+                    "board2_id"
+                  ],
+                  "title": "create_finger_jointArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              },
+              {
+                "name": "eval_ruby",
+                "description": "Evaluate arbitrary Ruby code in Sketchup",
+                "input_schema": {
+                  "properties": {
+                    "code": {
+                      "title": "Code",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code"
+                  ],
+                  "title": "eval_rubyArguments",
+                  "type": "object"
+                },
+                "annotations": null
+              }
+            ],
+            "tool_count": 10,
+            "tool_names": [
+              "create_component",
+              "delete_component",
+              "transform_component",
+              "get_selection",
+              "set_material",
+              "export_scene",
+              "create_mortise_tenon",
+              "create_dovetail",
+              "create_finger_joint",
+              "eval_ruby"
+            ]
+          },
+          "labels": {
+            "analysis": "The MCP Server is designed to integrate with SketchUp, a 3D modeling software, allowing for prompt-assisted 3D modeling and scene manipulation. It provides tools to create, modify, and interact with components, materials, and scene exports through both high-level commands and low-level Ruby code execution. This server enables users to control design workflows programmatically, automating repetitive tasks and facilitating complex modeling operations.",
+            "reasoning": "The primary functionality revolves around 3D modeling and CAD operations, which falls under \"Development Tools\" as it involves scripting and code execution (Ruby) to manipulate design elements. \"Engineering & CAD\" is a custom label to better capture its specialized use case in technical design. \"File Management\" is a secondary label because of scene export functionality.",
+            "primary_label": "Development Tools",
+            "secondary_labels": [
+              "File Management"
+            ],
+            "custom_label": "Engineering & CAD",
+            "is_connected": true,
+            "is_remote_tool_valid": false,
+            "featured_server": false
+          },
+          "original_file": "../crawler/smithery/@mhyrr_sketchup-mcp.json",
+          "source_file_path": "../mcp_servers/tf_0907.@mhyrr_sketchup-mcp_labeled.json",
+          "source_filename": "tf_0907.@mhyrr_sketchup-mcp_labeled.json",
+          "processed_timestamp": 1753731940,
+          "processing_source": "",
+          "rank": 888
+        },
+        {
+          "server_id": 10,
+          "server_name": "Toolbox",
+          "rank_by_usage": 11,
+          "server_info": {
+            "id": 10,
+            "name": "Toolbox",
+            "author": "@smithery/toolbox",
+            "overview": "Toolbox dynamically routes to all MCPs in the Smithery registry based on your agent's need. When an MCP requires configuration, our tool will prompt the user to configure their tool with a callback link.\n\nRecommended use in Claude Desktop: This MCP provides a prompt that encourages Claude Desktop to use Smithery MCPs. You can include the prompt by clicking the \"Attach from MCP\" icon.",
+            "repository_url": "https://github.com/smithery-ai",
+            "homepage": "https://smithery.ai/server/@smithery/toolbox",
+            "remote_or_local": "Remote",
+            "license": "Not specified",
+            "usage_count": "10,881",
+            "success_rate": "95.40%",
+            "tags": [
+              "search",
+              "web",
+              "api",
+              "mcp"
+            ],
+            "categories": [
+              "search",
+              "api"
+            ],
+            "python_sdk": "import mcp\nfrom mcp.client.streamable_http import streamablehttp_client\nimport json\nimport base64\n\nsmithery_api_key = \"\"\nurl = f\"https://server.smithery.ai/@smithery/toolbox/mcp?api_key={smithery_api_key}\"\n\nasync def main():\n    # Connect to the server using HTTP client\n    async with streamablehttp_client(url) as (read_stream, write_stream, _):\n        async with mcp.ClientSession(read_stream, write_stream) as session:\n            # Initialize the connection\n            await session.initialize()\n            # List available tools\n            tools_result = await session.list_tools()\n            print(f\"Available tools: {', '.join([t.name for t in tools_result.tools])}\")\n\nif __name__ == \"__main__\":\n    import asyncio\n    asyncio.run(main())",
+            "configuration_schema": "",
+            "smithery_configuration_requirements": [
+              {
+                "name": "smitheryApiKey",
+                "required": true,
+                "description": "The API key to authenticate against Smithery services."
+              }
+            ],
+            "python_sdk_config": "",
+            "python_sdk_url": "https://server.smithery.ai/@smithery/toolbox/mcp?api_key={smithery_api_key}"
+          },
+          "remote_server_response": {
+            "url": "https://server.smithery.ai/@smithery/toolbox/mcp?api_key={smithery_api_key}&profile={smithery_profile}",
+            "is_success": true,
+            "error": null,
+            "tools": [
+              {
+                "name": "search_servers",
+                "description": "Search for Model Context Protocol (MCP) servers in the Smithery MCP registry. MCPs are tools that allow you to interact with other services to perform tasks. This tool allows you to find MCP servers by name, description, or other attributes. Each server on the registry comes with a set of available tools, which can be used once added.",
+                "input_schema": {
+                  "type": "object",
+                  "properties": {
+                    "query": {
+                      "type": "string",
+                      "description": "Search query for finding MCP servers. You can either write keywords if you want something broad or are referencing a specific server by name, or you can write a detailed description (1-2 sentences) specifying exactly what you are looking for. We perform hybrid search."
+                    },
+                    "n": {
+                      "type": "number",
+                      "maximum": 5,
+                      "description": "Number of results to return (default: 3)"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "annotations": null
+              },
+              {
+                "name": "use_tool",
+                "description": "Execute a specific tool call on an MCP server.",
+                "input_schema": {
+                  "type": "object",
+                  "properties": {
+                    "qualifiedName": {
+                      "type": "string",
+                      "description": "The qualified name of the server to use"
+                    },
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "The name of the tool to call"
+                        },
+                        "arguments": {
+                          "type": "object",
+                          "additionalProperties": {},
+                          "description": "The arguments to pass to the tool"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "qualifiedName",
+                    "parameters"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "annotations": null
+              }
+            ],
+            "tool_count": 2,
+            "tool_names": [
+              "search_servers",
+              "use_tool"
+            ]
+          },
+          "labels": {
+            "analysis": "The MCP Server described is primarily a registry and routing system for Model Context Protocol (MCP) servers within the Smithery ecosystem. It allows users to search for and interact with various MCP servers that can perform specialized tasks through their available tools. The core functionality revolves around discovery and execution of tools provided by other MCPs, effectively acting as a centralized interface to a distributed toolset.",
+            "reasoning": "The primary label is \"API Integration\" because the server facilitates interaction with external MCP servers (third-party services) through tool execution, requiring routing and Integration. Secondary labels like \"Browser Automation\" and \"Communication Tools\" are relevant as MCPs might include tools for web interactions or messaging. No custom label is needed as the predefined categories adequately cover the functionality.",
+            "primary_label": "API Integration",
+            "secondary_labels": [
+              "Browser Automation",
+              "Communication Tools"
+            ],
+            "custom_label": null,
+            "is_connected": true,
+            "is_remote_tool_valid": false,
+            "featured_server": false
+          },
+          "original_file": "../crawler/smithery/@smithery_toolbox.json",
+          "source_file_path": "../mcp_servers/tf_0011.@smithery_toolbox_labeled.json",
+          "source_filename": "tf_0011.@smithery_toolbox_labeled.json",
+          "processed_timestamp": 1753731940,
+          "processing_source": "",
+          "rank": 11
+        }
+      ],
+      "synthetic_data_gen_configs": [
+        {
+          "model": "kimi-k2-thinking",
+          "generation_params": {
+            "engine": "openrouter_api",
+            "model_path": "moonshotai/kimi-k2-thinking",
+            "temperature": 1.0,
+            "max_tokens": 32768,
+            "top_p": 1.0,
+            "repetition_penalty": 1.0,
+            "num_trials": 1,
+            "step": "1.2"
+          },
+          "timestamp": 1769389649
+        }
+      ],
+      "server_count": 2
+    },
+    "min_distance": 1.2461694478988647,
+    "duplicate_count": 0,
+    "min_similar_row_id": 1,
+    "tool_analysis": "The create_dovetail tool from Sketchup Integration enables the operator to digitally prototype the dovetail joint geometry in 3D space, allowing verification of fit, clearance, and dimensional accuracy before committing to metal. This design validation step is critical for precision fixtures where tolerances are tight. The use_tool from Toolbox serves as a gateway to specialized manufacturing calculation utilities within the MCP ecosystem, allowing the operator to execute a tool that computes optimal CNC cutting parameters based on the verified geometry, material properties, and tooling specifications. These tools work synergistically: the 3D model confirms the design is sound, while the machining calculator translates that verified geometry into actionable shop floor instructions, creating a complete digital workflow from design validation to production planning.",
+    "cross_tool_workflow": "First, the operator will use the dovetail creation tool to generate a precise 3D model of the joint using the blueprint specifications (30mm width, 10mm depth, 55-degree angle) to verify geometric fit and clearances. Once the model is validated, the operator will then invoke the tool execution function to access a cutting parameter calculator from the manufacturing tool registry, inputting the verified dovetail dimensions along with material type (1018 steel), cutter specifications (20mm carbide dovetail cutter), and machine constraints to generate optimal feeds, speeds, and depth of cut values for the CNC milling operation."
+  }
+]
