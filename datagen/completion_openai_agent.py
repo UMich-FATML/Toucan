@@ -18,6 +18,7 @@ import atexit
 import os
 from time import sleep, time
 from tqdm import tqdm
+from virtual_tools import VirtualToolBackend, create_dynamic_virtual_tool
 from wrapt_timeout_decorator import timeout
 
 from utils import load_dataset_from_file, save_dataset, make_api_request_with_retry, get_model_short_name, validate_api_pool_from_file, check_if_api_key_is_valid, safe_save_checkpoint, get_model_abbreviation
@@ -28,6 +29,8 @@ from agents.mcp import MCPServerStreamableHttp
 from agents.run_context import RunContextWrapper
 from agents import Agent, OpenAIResponsesModel, Runner, SQLiteSession
 from openai import AsyncClient
+from typing import Dict, Any, List, Optional
+from pydantic import create_model, Field, BaseModel
 
 # Check if agents library is installed
 try:
@@ -98,6 +101,11 @@ def get_args():
     parser.add_argument("--enable_tool_hint", action="store_true", help="Enable tool hint (default: off)")
     parser.add_argument("--enable_irrelevant_warning", action="store_true", help="Enable irrelevant warning (default: off)")
     parser.add_argument("--max_turns", type=int, default=10, help="Maximum number of turns for agent inference (default: 10)")
+
+    #tool parameters
+    parser.add_argument("--virtual_tools", action="store_true", help="Use LLM-hallucinated tools instead of real MCP connections")
+    parser.add_argument("--virtual_tool_model", type=str, default="z-ai/glm-4.7", 
+                    help="Model to use for virtual tool hallucination (default: z-ai/glm-4.7)")
     return parser.parse_args()
 
 args = get_args()
@@ -171,87 +179,64 @@ elif args.engine == "vllm_api":
 smithery_api_pool = None
 
 def load_and_validate_smithery_api_pool(pool_file_path):
-    """Load and validate Smithery API pool from JSON file, keeping only valid keys"""
+    """
+    Load Smithery API pool from JSON file.
+    Non-blocking: If validation fails or file is missing, returns empty list/None
+    instead of raising errors, allowing the script to proceed (e.g. for virtual tools).
+    """
     global smithery_api_pool
     
     print("=" * 50)
-    print("🔍 SMITHERY API POOL VALIDATION")
+    print("🔍 SMITHERY API POOL CHECK (Non-blocking)")
     print("=" * 50)
     
-    # Check if pool file exists
-    if not os.path.exists(pool_file_path):
-        print(f"⚠️  API pool file {pool_file_path} not found!")
-        print("🔍 Testing fallback API key from arguments...")
-        
-        # Validate the fallback API key
-        fallback_result = check_if_api_key_is_valid(args.smithery_profile, args.smithery_api_key)
-        
-        if not fallback_result['valid']:
-            raise ValueError(f"❌ Fallback API key is also invalid: {fallback_result['message']}")
-        
-        print(f"✅ Fallback API key is valid: {fallback_result['message']}")
-        smithery_api_pool = [{
-            "profile": args.smithery_profile,
-            "api_key": args.smithery_api_key,
-            "source": "fallback"
-        }]
-        print(f"✅ Using 1 valid API key (fallback)")
-        print("=" * 50)
-        return smithery_api_pool
-    
-    # Validate the entire API pool using the test logic
-    print(f"📁 Validating all entries in {pool_file_path}...")
-    
     try:
-        results = validate_api_pool_from_file(pool_file_path)
-        
-        if "error" in results:
-            print(f"❌ Error: {results['error']}")
-            raise ValueError(f"API pool validation failed: {results['error']}")
-        
-        # Display detailed results like in test file
-        print("=" * 30)
-        print("📊 VALIDATION SUMMARY")
-        print("=" * 30)
-        print(f"Total entries: {results['total_entries']}")
-        print(f"Valid entries: {results['valid_entries']}")
-        print(f"Invalid entries: {results['invalid_entries']}")
-        print(f"Success rate: {results['valid_entries']/results['total_entries']*100:.1f}%")
-        
-        print(f"\n📋 DETAILED RESULTS")
-        print("-" * 30)
-        for result in results['results']:
-            status = "✅" if result['valid'] else "❌"
-            print(f"{status} {result['profile']} ({result['source']}): {result['message']}")
-        
-        # Check if we have any valid entries
-        if results['valid_entries'] == 0:
-            raise ValueError("❌ No valid API keys found in the pool! All API keys failed validation.")
-        
-        # Load original data to get valid entries with API keys
-        with open(pool_file_path, 'r') as f:
-            original_data = json.load(f)
-            original_pool = original_data.get('api_pool', [])
-        
-        # Keep only valid entries
-        valid_pool = []
-        for result in results['results']:
-            if result['valid']:
-                # Find the original entry to get the API key
-                for original_entry in original_pool:
-                    if original_entry['profile'] == result['profile']:
-                        valid_pool.append(original_entry)
-                        break
-        
-        smithery_api_pool = valid_pool
-        
-        print(f"\n✅ SUCCESS: Using {len(smithery_api_pool)} valid API keys from pool")
-        print("=" * 50)
-        return smithery_api_pool
-        
+        # 1. Check if pool file exists
+        if not os.path.exists(pool_file_path):
+            print(f"ℹ️  API pool file {pool_file_path} not found.")
+            print("   Proceeding without API pool (using args or virtual tools).")
+            smithery_api_pool = []
+            return []
+
+        # 2. Try to validate (but don't crash if network fails)
+        print(f"📁 Found {pool_file_path}. Attempting validation...")
+        try:
+            results = validate_api_pool_from_file(pool_file_path)
+            
+            if "error" in results:
+                print(f"⚠️  API pool validation warning: {results['error']}")
+                print("   Proceeding without verified pool.")
+                smithery_api_pool = []
+                return []
+            
+            # Load original data to get valid entries with API keys
+            with open(pool_file_path, 'r') as f:
+                original_data = json.load(f)
+                original_pool = original_data.get('api_pool', [])
+            
+            # Keep only valid entries
+            valid_pool = []
+            for result in results['results']:
+                if result['valid']:
+                    for original_entry in original_pool:
+                        if original_entry['profile'] == result['profile']:
+                            valid_pool.append(original_entry)
+                            break
+            
+            smithery_api_pool = valid_pool
+            print(f"✅ Loaded {len(smithery_api_pool)} valid API keys from pool.")
+            return smithery_api_pool
+
+        except Exception as e:
+            print(f"⚠️  Network/Validation check failed: {e}")
+            print("   Proceeding without verified pool (this is fine for virtual tools).")
+            smithery_api_pool = []
+            return []
+
     except Exception as e:
-        print(f"❌ Error during API pool validation: {e}")
-        raise ValueError(f"API pool validation failed: {str(e)}")
+        print(f"⚠️  Unexpected error loading pool: {e}")
+        smithery_api_pool = []
+        return []
 
 def get_api_key_for_worker(worker_id):
     """Get API key and profile for a specific worker"""
@@ -461,83 +446,104 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
 
 def create_agent_for_item(item, api_key=None, profile=None):
     """
-    Create an OpenAI Agent for an item if it has MCP server information
+    Create an OpenAI Agent for an item. 
+    Supports both REAL MCP servers and VIRTUAL (LLM-generated) tools.
     """
-    # Check if item has MCP server info in metadata
     metadata = item.get('metadata', {})
     mcp_servers = metadata.get('mcp_servers', [])
     
     if not mcp_servers or not isinstance(mcp_servers, list):
         return None
     
-    # Setup OpenAI model config
+    # --- CLIENT SETUP (Shared for both modes) ---
     if args.engine == "openrouter_api":
-        model = OpenAIResponsesModel(
-            args.model_path,
-            openai_client=AsyncClient(
-                base_url=args.openrouter_url,
-                api_key=args.openrouter_api_key,
-            ),
+        client = AsyncClient(
+            base_url=args.openrouter_url,
+            api_key=args.openrouter_api_key,
         )
     elif args.engine == "vllm_api":
-        model = OpenAIResponsesModel(
-            args.model_path,
-            openai_client=AsyncClient(
-                base_url=args.vllm_api_url,
-                api_key=args.vllm_api_key,
-            ),
+        client = AsyncClient(
+            base_url=args.vllm_api_url,
+            api_key=args.vllm_api_key,
         )
     else:
-        print(f"Unsupported engine: {args.engine}")
         return None
-    
-    # Setup MCP servers list
-    mcp_servers_list = []
-    
-    for server_info in mcp_servers:
-        server_name = server_info.get('server_name', 'unknown-server')
-        server_details = server_info.get('server_info', {})
+
+    model = OpenAIResponsesModel(args.model_path, openai_client=client)
+
+    # --- MODE 1: VIRTUAL TOOLS (Hallucinated) ---
+    # You will need to add --virtual_tools to your args parser
+    if hasattr(args, 'virtual_tools') and args.virtual_tools:
         
-        # Construct MCP server URL with provided api_key and profile
-        server_url = construct_mcp_server_url(server_details, api_key, profile)
-        if not server_url:
-            print(f"Failed to construct URL for server {server_name}")
-            continue
-        
-        # Create safe server name for config
-        safe_server_name = server_name.replace(' ', '-').lower()
-        
-        print(f"📡 Configured MCP server: {safe_server_name} -> {server_url[:100]}...")
-        mcp_servers_list.append({
-            "name": safe_server_name,
-            "url": server_url,
-            "timeout": 600.0,
-            "sse_read_timeout": 600.0,
-            "terminate_on_close": False
-        })
-    
-    if not mcp_servers_list:
-        print("No valid MCP servers found")
-        return None
-    
-    # Create agent with better error handling
-    try:
-        print(f"🤖 Creating OpenAI agent with {len(mcp_servers_list)} MCP servers...")
-        agent_config = {
+        print(f"👻 Configuring Agent with VIRTUAL tools (Model: {args.model_path})...")
+        virtual_backend = VirtualToolBackend(client, model_path=args.virtual_tool_model)
+        virtual_tool_funcs = []
+
+        for server_info in mcp_servers:
+            # In your metadata, tools are often nested in 'remote_server_response' or 'server_info_crawled'
+            # We look in both places to be safe
+            remote_resp = server_info.get('remote_server_response', {})
+            crawled_info = server_info.get('server_info_crawled', {})
+            server_metadata = server_info.get('metadata', {})
+            server_name = server_metadata.get('name', '')
+            labeled_info = server_info.get('labels', {})
+            server_analysis = labeled_info.get('analysis', '')
+            
+            # Get tool definitions
+            tools_list = remote_resp.get('tools', [])
+            if not tools_list:
+                tools_list = crawled_info.get('tools', [])
+
+            for tool_def in tools_list:
+                # Create the dynamic python function for this tool
+                if server_analysis and server_name and tool_def['description']:
+                    tool_def['description'] = f'''This tool comes from the MCP server: {server_name}. 
+                    
+                    An analysis of this server is as follows: {server_analysis}.
+                    
+                    This tool has the following functionality within the MCP server: {tool_def['description']}'''
+                v_tool = create_dynamic_virtual_tool(tool_def, virtual_backend)
+                virtual_tool_funcs.append(v_tool)
+
+        if not virtual_tool_funcs:
+            print("❌ No tool definitions found in metadata for virtual generation.")
+            return None
+
+        # Return config with 'tools' instead of 'mcp_servers_list'
+        return {
+            "name": "OSS-Virtual-Assistant",
+            "instructions": "You are a helpful assistant. Use the provided tools to answer the user query.",
+            "model": model,
+            "tools": virtual_tool_funcs, # <--- The Agent uses these directly
+            "mcp_servers_list": [] # No real connections
+        }
+
+    # --- MODE 2: REAL MCP SERVERS (Existing Logic) ---
+    else:
+        mcp_servers_list = []
+        for server_info in mcp_servers:
+            server_details = server_info.get('server_info', {})
+            server_url = construct_mcp_server_url(server_details, api_key, profile)
+            
+            if server_url:
+                safe_name = server_info.get('server_name', 'unknown').replace(' ', '-').lower()
+                mcp_servers_list.append({
+                    "name": safe_name,
+                    "url": server_url,
+                    "timeout": 600.0,
+                    "sse_read_timeout": 600.0,
+                    "terminate_on_close": False
+                })
+
+        if not mcp_servers_list:
+            return None
+
+        return {
             "name": "OSS-Assistant",
-            "instructions": """You are a helpful assistant with access to various tools and data sources. 
-            When users ask questions, you MUST use the available tools.""",
+            "instructions": "You are a helpful assistant. Use the available tools.",
             "model": model,
             "mcp_servers_list": mcp_servers_list
         }
-        print(f"✅ Agent config created successfully")
-        return agent_config
-    except Exception as e:
-        print(f"❌ Failed to create agent with {len(mcp_servers_list)} servers: {e}")
-        print(f"   Error type: {type(e).__name__}")
-        if hasattr(e, '__cause__') and e.__cause__:
-            print(f"   Caused by: {e.__cause__}")
-        return None
 
 def qwen_compatible_system_prompt_generator(tools):
     """Generate a Qwen-compatible system prompt from tool specs.
@@ -632,6 +638,8 @@ async def process_single_item_agent_async(item, api_key=None, profile=None):
 
             # Handle both single and multiple MCP servers
             server_configs = agent_config["mcp_servers_list"]
+            mcp_servers = []
+            server_contexts = []
             
             # Create a list to hold all MCP server context managers
             async def create_mcp_servers():
@@ -662,16 +670,24 @@ async def process_single_item_agent_async(item, api_key=None, profile=None):
             
             # Create and manage multiple MCP servers
             try:
-                mcp_servers, server_contexts = await create_mcp_servers()
+                if server_configs:
+                    mcp_servers, server_contexts = await create_mcp_servers()
                 
                 try:
                     # Create OpenAI Agent with multiple MCP servers
-                    agent = Agent(
-                        name=agent_config["name"],
-                        instructions=agent_config["instructions"],
-                        model=agent_config["model"],
-                        mcp_servers=mcp_servers
-                    )
+                    agent_kwargs = {
+                    "name": agent_config["name"],
+                    "instructions": agent_config["instructions"],
+                    "model": agent_config["model"],}
+
+                # conditionally add servers or tools based on what exists
+                    if mcp_servers:
+                        agent_kwargs["mcp_servers"] = mcp_servers
+                    
+                    if agent_config.get("tools"):
+                        # This passes our Virtual Tool Functions to the Agent
+                        agent_kwargs["tools"] = agent_config["tools"]
+                    agent = Agent(**agent_kwargs)
                     run_context = RunContextWrapper(context=None)
                     
                     print(f"🔍 User Query Passed to Agent: {user_content}")
@@ -715,11 +731,12 @@ async def process_single_item_agent_async(item, api_key=None, profile=None):
                     all_messages = convert_openai_agent_result_to_messages(result, message, system_prompt)
                                     
                     if len(all_messages) > len(message):
-                        print(f"✅ OpenAI agent inference completed for item {prompt_id} with {len(mcp_servers)} MCP servers\n============================================================")
+                        tool_count = len(mcp_servers) if mcp_servers else len(agent_config.get("tools", []))
+                        source_type = "MCP servers" if mcp_servers else "Virtual Tools"
+                        print(f"✅ OpenAI agent inference completed for item {prompt_id} with {tool_count} {source_type}\n============================================================")
                         item['messages'] = all_messages
                     else:
                         print(f"⚠️ OpenAI agent inference returned empty response for item {prompt_id}\n============================================================")
-                        # Throw exception to trigger fallback instead of returning empty content
                         raise Exception("Agent returned empty response")
                 
                 finally:
@@ -1150,10 +1167,15 @@ def generate_and_update(dataset, checkpoint_file):
 # Main function to control workflow
 def main():
     # Load and validate Smithery API pool
+    if args.engine == "openrouter_api" and not args.openrouter_api_key:
+        args.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        if not args.openrouter_api_key:
+            print("⚠️  Warning: OpenRouter API Key is missing! (Env var OPENROUTER_API_KEY not found)")
     api_pool = load_and_validate_smithery_api_pool(args.smithery_api_pool)
     
     # Display dynamic processing info
-    effective_workers = args.max_workers or len(api_pool)
+    pool_size = len(api_pool) if api_pool else 0
+    effective_workers = args.max_workers or (pool_size if pool_size > 0 else 8)
     print("=" * 50)
     print("🚀 DYNAMIC PROCESSING CONFIGURATION")
     print("=" * 50)
