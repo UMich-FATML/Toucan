@@ -4,7 +4,9 @@ import argparse
 import json
 import time
 import random
+import itertools
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
 from utils import load_jsonl_to_list
@@ -15,21 +17,31 @@ from utils import load_jsonl_to_list
 """
 This script generates questions for tool use scenarios using occupation-based tool sampling via O*NET codes.
 
+The script uses DETERMINISTIC combo generation:
+1. Enumerates all possible (occupation, tool_combination) pairs upfront
+2. Orders by occupation code first, then tool combinations within each occupation
+3. Generates questions for the first N combinations (where N = total_prompts)
+4. Saves the full combinations dataframe as a parquet file
+
+This ensures reproducibility - running with the same arguments always produces identical results.
+
 Example Usage:
 
 1. Basic usage - generate 100 prompts with 2 tools each:
    python step1.1_gen_questions_onet.py --num_tools 2 --total_prompts 100
 
-2. Generate with specific seed for reproducibility:
-   python step1.1_gen_questions_onet.py --num_tools 3 --total_prompts 500 --seed 42
-
-3. Custom output folder and job name:
+2. Custom output folder and job name:
    python step1.1_gen_questions_onet.py --num_tools 2 --total_prompts 1000 --output_folder ../data --job_name my_experiment
 
 Key Parameters:
 - --num_tools: Number of tools to include in each prompt (required)
 - --total_prompts: Total number of prompts to generate (required)
-- --seed: Random seed for reproducibility
+- --seed: Random seed (only affects np.random, not combo generation which is deterministic)
+
+Output Files:
+- <output_dir>/<job_folder>/ToolUse_s2q_onet_*_prepared.jsonl: Generated prompts
+- <output_dir>/<job_folder>/occupation_tool_combos.parquet: All possible combinations
+- <output_dir>/<job_folder>/generation_args.json: Arguments used for generation
 """
 
 ################
@@ -145,6 +157,41 @@ def get_valid_occupations(occupation_to_tools, num_tools):
 
   print(f"Found {len(valid_occupations)} occupations with >= {num_tools} tools")
   return valid_occupations
+
+
+def build_all_combinations(occupation_to_tools, valid_occupations, num_tools, limit):
+  """
+  Build dataframe of all (occupation, tool_combo) pairs.
+  Sorted by occupation code, then by tool indices within each occupation.
+
+  Args:
+    occupation_to_tools: Index from onet_soc_code to tools
+    valid_occupations: List of valid onet_soc_codes
+    num_tools: Number of tools per combination
+    limit: maximum number of combinations to generate
+
+  Returns:
+    pd.DataFrame with columns: onet_code, tool_indices, tools (list of tool entries)
+  """
+  all_combos = []
+  for onet_code in sorted(valid_occupations):  # Sort by occupation code
+    tools = occupation_to_tools[onet_code]
+    for combo in itertools.combinations(range(len(tools)), num_tools):
+      all_combos.append({
+        'onet_code': onet_code,
+        'tool_indices': combo,
+        'tools': [tools[i] for i in combo]
+      })
+      # Early termination if we have enough
+      if len(all_combos) >= limit:
+        break
+    # Also break outer loop if limit reached
+    if len(all_combos) >= limit:
+      break
+
+  df = pd.DataFrame(all_combos)
+  print(f"Built {len(df)} (occupation, tool_combo) combinations")
+  return df
 
 
 ################
@@ -365,6 +412,18 @@ if __name__ == "__main__":
             f"Try reducing --num_tools.")
 
   #################
+  # Build all combinations (deterministic)
+  #################
+  combos_df = build_all_combinations(occupation_to_tools, valid_occupations, args.num_tools, limit=args.total_prompts)
+
+  if args.total_prompts > len(combos_df):
+    print(f"Warning: Requested {args.total_prompts} prompts but only {len(combos_df)} combinations available.")
+    print(f"Generating {len(combos_df)} prompts instead.")
+    num_prompts_to_generate = len(combos_df)
+  else:
+    num_prompts_to_generate = args.total_prompts
+
+  #################
   # Create output file / folder
   #################
   output_filename = f"ToolUse_s2q_onet_{args.total_prompts}_{args.num_tools}tool_{args.timestamp}_prepared.jsonl"
@@ -391,19 +450,65 @@ if __name__ == "__main__":
   print(f"Arguments saved to: {args_file_path}")
 
   #################
-  # Generate outputs
+  # Save combinations dataframe as parquet
+  #################
+  # Create a serializable version for parquet (convert tool objects to metadata)
+  combos_for_parquet = []
+  for idx, row in combos_df.iterrows():
+    combo_record = {
+      'combo_idx': idx,
+      'onet_code': row['onet_code'],
+      'tool_indices': list(row['tool_indices']),
+      'tools_metadata': [
+        {
+          'server_idx': t['server_idx'],
+          'tool_idx': t['tool_idx'],
+          'tool_name': t['tool_record'].get('tool_name'),
+          'server_name': t['tool_record'].get('server_name')
+        }
+        for t in row['tools']
+      ]
+    }
+    combos_for_parquet.append(combo_record)
+
+  combos_parquet_df = pd.DataFrame(combos_for_parquet)
+  parquet_path = f"{args_output_dir}/occupation_tool_combos.parquet"
+  combos_parquet_df.to_parquet(parquet_path, index=False)
+  print(f"Combinations dataframe saved to: {parquet_path}")
+
+  #################
+  # Generate outputs (deterministic - iterate over first N combinations)
   #################
   results = []
 
-  pbar = tqdm(total=args.total_prompts, desc="Generating prompts")
-  for i in range(args.total_prompts):
-    # Randomly select a valid occupation
-    onet_code = random.choice(valid_occupations)
+  pbar = tqdm(total=num_prompts_to_generate, desc="Generating prompts")
+  for i in range(num_prompts_to_generate):
+    # Get the i-th combination from the dataframe
+    row = combos_df.iloc[i]
+    onet_code = row['onet_code']
+    tool_entries = row['tools']  # List of tool entries (already selected)
+
     occupation_info = occupation_lookup.get(onet_code, {'title': 'Unknown Occupation', 'description': ''})
     occupation_title = occupation_info['title']
 
-    # Sample tools from this occupation
-    sampled_tools = sample_tools_for_occupation(occupation_to_tools, onet_code, args.num_tools)
+    # Build sampled_tools from the pre-selected tool entries
+    # (same structure as sample_tools_for_occupation output)
+    sampled_tools = []
+    for tool_entry in tool_entries:
+      tool_record = tool_entry['tool_record']
+
+      # Filter tasks that belong to this occupation
+      relevant_tasks = [
+        task for task in tool_record.get('matched_tasks', [])
+        if task.get('onet_soc_code') == onet_code
+      ]
+
+      sampled_tools.append({
+        'server_idx': tool_entry['server_idx'],
+        'tool_idx': tool_entry['tool_idx'],
+        'tool_record': tool_record,
+        'relevant_tasks': relevant_tasks
+      })
 
     # Format template placeholders
     tasks_formatted = format_tasks(sampled_tools)
@@ -457,4 +562,6 @@ if __name__ == "__main__":
       f.write(json.dumps(result) + "\n")
 
   print(f"Finished. Total prompts: {len(results)}")
+  print(f"Total combinations available: {len(combos_df)}")
   print(f"Output file: {output_dir}")
+  print(f"Combinations parquet: {parquet_path}")
