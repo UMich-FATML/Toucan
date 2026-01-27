@@ -164,66 +164,43 @@ def parse_xml_response(response_content, metadata=None):
 def extract_individual_components(response_xml, metadata=None):
     """
     Extract individual components from XML, handling both single and multi-server formats.
-    Supports both old field names (server_analysis, cross_server_workflow) and
-    new field names (tool_analysis, cross_tool_workflow), preserving the original format.
     """
 
-    # Try getting mode from question_gen_args, fallback to top-level metadata
-    mode = metadata.get("question_gen_args", {}).get("mode")
-    if not mode:
-        mode = metadata.get("mode", "unknown")
+    mode = metadata.get("question_gen_args", {}).get("mode", "unknown")
     if mode == "unknown":
         raise ValueError(f"Mode is unknown in metadata: {metadata}")
-    elif mode in ["multi_server", "onet_occupation"]:
-        # Multi-server format: extract analysis and workflow fields
-        # Try new names first, fall back to old names
-        tool_analysis = extract_xml_content(response_xml, 'tool_analysis')
-        if tool_analysis:
-            analysis_key = 'tool_analysis'
-        else:
-            tool_analysis = extract_xml_content(response_xml, 'server_analysis')
-            analysis_key = 'server_analysis'
-
-        cross_tool_workflow = extract_xml_content(response_xml, 'cross_tool_workflow')
-        if cross_tool_workflow:
-            workflow_key = 'cross_tool_workflow'
-        else:
-            cross_tool_workflow = extract_xml_content(response_xml, 'cross_server_workflow')
-            workflow_key = 'cross_server_workflow'
-
+    elif mode == "multi_server":
+        # Multi-server format: extract server_analysis and cross_server_workflow separately
+        server_analysis = extract_xml_content(response_xml, 'server_analysis')
+        cross_server_workflow = extract_xml_content(response_xml, 'cross_server_workflow')
+        
         # Extract target tools and question
         target_tools = extract_xml_tools(response_xml, metadata)
         question = extract_xml_content(response_xml, 'question')
         # Validate that we have all required components
-        if not all([tool_analysis, target_tools, question]):
+        if not all([server_analysis, target_tools, question]):
             return None
-
+            
         return {
-            analysis_key: tool_analysis.strip(),
-            workflow_key: cross_tool_workflow.strip() if cross_tool_workflow else "",
+            "server_analysis": server_analysis.strip(),
+            "cross_server_workflow": cross_server_workflow.strip() if cross_server_workflow else "",
             "target_tools": target_tools.strip(),
             "question": clean_html_comments(question.strip())
         }
     else:
-        # Single-server format: extract analysis field directly
-        # Try new name first, fall back to old name
-        tool_analysis = extract_xml_content(response_xml, 'tool_analysis')
-        if tool_analysis:
-            analysis_key = 'tool_analysis'
-        else:
-            tool_analysis = extract_xml_content(response_xml, 'server_analysis')
-            analysis_key = 'server_analysis'
-
+        # Single-server format: extract server_analysis directly
+        server_analysis = extract_xml_content(response_xml, 'server_analysis')
+        
         # Extract target tools and question
         target_tools = extract_xml_tools(response_xml, metadata)
         question = extract_xml_content(response_xml, 'question')
-
+        
         # Validate that we have all required components
-        if not all([tool_analysis, target_tools, question]):
+        if not all([server_analysis, target_tools, question]):
             return None
-
+            
         return {
-            analysis_key: tool_analysis.strip(),
+            "server_analysis": server_analysis.strip(),
             "target_tools": target_tools.strip(),
             "question": clean_html_comments(question.strip())
         }
@@ -275,16 +252,13 @@ def extract_xml_tools(text, metadata=None):
         return ""
     
     # Get mode from metadata
-    # Try getting mode from question_gen_args, fallback to top-level metadata
-    mode = metadata.get("question_gen_args", {}).get("mode")
-    if not mode:
-        mode = metadata.get("mode", "unknown")
+    mode = metadata.get("question_gen_args", {}).get("mode", "unknown")
     if mode == "unknown":
         raise ValueError(f"Mode is unknown in metadata: {metadata}")
 
     
     # Strategy 1: XML tool tags with server attributes - must be multi_server mode
-    if mode in ["multi_server", "onet_occupation"]:     
+    if mode == "multi_server":     
         # Check if we have XML tool tags with server attributes (Strategy 1)
         tool_pattern = r'<tool[^>]*server="([^"]*)"[^>]*>(.*?)</tool>'
         tool_matches = re.findall(tool_pattern, target_tools_content, re.DOTALL)
@@ -496,28 +470,28 @@ def extract_questions(input_file, output_file, preview_file=None):
 
                 
                 # Prepare the result structure with enhanced metadata
-                # Preserve whichever field names exist in parsed_response (old or new format)
-                result = {
-                    "target_tools": parsed_response["target_tools"],
-                    "question": parsed_response["question"],
-                    "metadata": {
-                        **filtered_metadata,
-                        "server_count": get_server_count(filtered_metadata)
+                if mode == "multi_server":
+                    result = {
+                        "server_analysis": parsed_response["server_analysis"],
+                        "cross_server_workflow": parsed_response["cross_server_workflow"],
+                        "target_tools": parsed_response["target_tools"],
+                        "question": parsed_response["question"],
+                        "metadata": {
+                            **filtered_metadata,
+                            "server_count": get_server_count(filtered_metadata)
+                        }
                     }
-                }
-
-                # Add analysis field (tool_analysis or server_analysis)
-                if 'tool_analysis' in parsed_response:
-                    result['tool_analysis'] = parsed_response['tool_analysis']
-                elif 'server_analysis' in parsed_response:
-                    result['server_analysis'] = parsed_response['server_analysis']
-
-                # Add workflow field for multi-server mode (cross_tool_workflow or cross_server_workflow)
-                if mode in ["multi_server", "onet_occupation"]:
-                    if 'cross_tool_workflow' in parsed_response:
-                        result['cross_tool_workflow'] = parsed_response['cross_tool_workflow']
-                    elif 'cross_server_workflow' in parsed_response:
-                        result['cross_server_workflow'] = parsed_response['cross_server_workflow']
+                else:
+                    result = {
+                        "server_analysis": parsed_response["server_analysis"],
+                        "cross_server_workflow": None,
+                        "target_tools": parsed_response["target_tools"],
+                        "question": parsed_response["question"],
+                        "metadata": {
+                            **filtered_metadata,
+                            "server_count": get_server_count(filtered_metadata)
+                        }
+                    }
                 
                 # Clean unusual line terminators
                 result = clean_json_object(result)
@@ -652,31 +626,12 @@ def sanitize_questions(input_file, sanitized_output, distance_output, preview_di
     print("Saving sanitized questions...")
     
     # Prepare data for output
-    # Support both old (server_analysis) and new (tool_analysis) field names
-    analyses = []
-    analysis_keys = []
-    for item in dataset_items:
-        if 'tool_analysis' in item:
-            analyses.append(item.get('tool_analysis', ''))
-            analysis_keys.append('tool_analysis')
-        else:
-            analyses.append(item.get('server_analysis', ''))
-            analysis_keys.append('server_analysis')
-
+    server_analyses = [item.get("server_analysis", "") for item in dataset_items]
     target_tools = [item["target_tools"] for item in dataset_items]
     metadata_list = [item.get("metadata", {}) for item in dataset_items]
-
-    # Handle workflow field (may not exist for all entries)
-    # Support both old (cross_server_workflow) and new (cross_tool_workflow) field names
-    workflows = []
-    workflow_keys = []
-    for item in dataset_items:
-        if 'cross_tool_workflow' in item:
-            workflows.append(item.get('cross_tool_workflow', ''))
-            workflow_keys.append('cross_tool_workflow')
-        else:
-            workflows.append(item.get('cross_server_workflow', ''))
-            workflow_keys.append('cross_server_workflow')
+    
+    # Handle cross_server_workflow field (may not exist for all entries)
+    cross_server_workflows = [item.get("cross_server_workflow", "") for item in dataset_items]
     
     # Save all questions
     total_rows = 0
@@ -684,7 +639,7 @@ def sanitize_questions(input_file, sanitized_output, distance_output, preview_di
         for idx in tqdm(range(len(questions)), desc="Preparing all entries"):
             # Filter metadata to only include servers that provide the target tools
             filtered_metadata = filter_metadata_by_target_tools(metadata_list[idx], target_tools[idx])
-
+            
             entry = {
                 "target_tools": target_tools[idx],
                 "question": questions[idx],
@@ -693,17 +648,17 @@ def sanitize_questions(input_file, sanitized_output, distance_output, preview_di
                 "duplicate_count": duplicate_counts[idx],
                 "min_similar_row_id": min_similar_row_ids[idx]
             }
-
-            # Add analysis field (preserves original field name: tool_analysis or server_analysis)
-            if idx < len(analyses) and analyses[idx]:
-                entry[analysis_keys[idx]] = analyses[idx]
-
-            # Add workflow field if it exists (preserves original field name: cross_tool_workflow or cross_server_workflow)
-            if idx < len(workflows):
-                workflow = workflows[idx]
+            
+            # Add server_analysis
+            if isinstance(server_analyses, list) and idx < len(server_analyses) and server_analyses[idx]:
+                entry["server_analysis"] = server_analyses[idx]
+            
+            # Add cross_server_workflow if it exists
+            if isinstance(cross_server_workflows, list) and idx < len(cross_server_workflows):
+                workflow = cross_server_workflows[idx]
                 if workflow:  # Only add if not empty
-                    entry[workflow_keys[idx]] = workflow
-
+                    entry["cross_server_workflow"] = workflow
+            
             # Clean unusual line terminators
             entry = clean_json_object(entry)
             f_out.write(json.dumps(entry, ensure_ascii=False) + '\n')
@@ -718,7 +673,7 @@ def sanitize_questions(input_file, sanitized_output, distance_output, preview_di
             if min_distances[idx] > distance_threshold or min_similar_row_ids[idx] == row_ids[idx]:
                 # Filter metadata to only include servers that provide the target tools
                 filtered_metadata = filter_metadata_by_target_tools(metadata_list[idx], target_tools[idx])
-
+                
                 entry = {
                     "target_tools": target_tools[idx],
                     "question": questions[idx],
@@ -727,17 +682,17 @@ def sanitize_questions(input_file, sanitized_output, distance_output, preview_di
                     "duplicate_count": duplicate_counts[idx],
                     "min_similar_row_id": min_similar_row_ids[idx]
                 }
-
-                # Add analysis field (preserves original field name: tool_analysis or server_analysis)
-                if idx < len(analyses) and analyses[idx]:
-                    entry[analysis_keys[idx]] = analyses[idx]
-
-                # Add workflow field if it exists (preserves original field name: cross_tool_workflow or cross_server_workflow)
-                if idx < len(workflows):
-                    workflow = workflows[idx]
+                
+                # Add server_analysis
+                if isinstance(server_analyses, list) and idx < len(server_analyses) and server_analyses[idx]:
+                    entry["server_analysis"] = server_analyses[idx]
+                
+                # Add cross_server_workflow if it exists
+                if isinstance(cross_server_workflows, list) and idx < len(cross_server_workflows):
+                    workflow = cross_server_workflows[idx]
                     if workflow:  # Only add if not empty
-                        entry[workflow_keys[idx]] = workflow
-
+                        entry["cross_server_workflow"] = workflow
+                
                 # Clean unusual line terminators
                 entry = clean_json_object(entry)
                 f_out.write(json.dumps(entry, ensure_ascii=False) + '\n')
@@ -779,14 +734,7 @@ def prepare_questions(input_file, output_file):
             
             # Collect statistics
             stats["total_questions"] += 1
-            
-            # Try getting mode from question_gen_args, fallback to top-level metadata
-            mode = filtered_metadata.get("question_gen_args", {}).get("mode")
-            if not mode:
-                mode = filtered_metadata.get("mode", "unknown")
-
-            if mode == "unknown":
-                raise ValueError(f"Mode is unknown in metadata: {filtered_metadata}")
+            mode = filtered_metadata.get("question_gen_args", {}).get("mode", "unknown")
             if mode == "unknown":
                 raise ValueError(f"Mode is unknown in metadata: {filtered_metadata}")
             if mode == "single_server":
@@ -821,16 +769,12 @@ def prepare_questions(input_file, output_file):
                 }
             }
             
-            # Add analysis field (preserves original field name: tool_analysis or server_analysis)
-            if "tool_analysis" in data and data["tool_analysis"]:
-                result["metadata"]["tool_analysis"] = data["tool_analysis"]
-            elif "server_analysis" in data and data["server_analysis"]:
+            # Add server_analysis
+            if "server_analysis" in data and data["server_analysis"]:
                 result["metadata"]["server_analysis"] = data["server_analysis"]
-
-            # Add workflow field to metadata if it exists (preserves original field name)
-            if "cross_tool_workflow" in data and data["cross_tool_workflow"]:
-                result["metadata"]["cross_tool_workflow"] = data["cross_tool_workflow"]
-            elif "cross_server_workflow" in data and data["cross_server_workflow"]:
+            
+            # Add cross_server_workflow to metadata if it exists
+            if "cross_server_workflow" in data and data["cross_server_workflow"]:
                 result["metadata"]["cross_server_workflow"] = data["cross_server_workflow"]
             
             # Clean unusual line terminators
