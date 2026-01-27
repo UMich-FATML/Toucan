@@ -72,9 +72,17 @@ bash step1.2_completion.sh {Question File Generated From Step 1.1} {Model Name}
 
 This step processes and sanitizes the raw model completions generated in Step 1.2. It removes duplicates, cleans up formatting, and prepares the questions for downstream quality assessment. The script supports deduplication using sentence embeddings, configurable thresholds, and can optionally append tool hints to each question.
 
+For questions generated with standard modes (single_server or multi_server):
 ```
 python step1.3_process_completion.py --input_file {Response File Generated From Step 1.2}
 ```
+
+For questions generated with O*NET occupations and tasks (using step1.1_gen_questions_onet.py):
+```
+python step1.3_process_completion_onet.py --input_file {Response File Generated From Step 1.2}
+```
+
+Note: The O*NET processing script expects a different XML response format and handles tool_analysis and cross_tool_workflow fields specific to O*NET-grounded questions.
 
 ### Step 2: Question Quality Check
 
