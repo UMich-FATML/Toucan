@@ -42,8 +42,9 @@ Brainstorm a compelling real-world scenario, then analyze the provided tools and
 Your response should include:
 1. **Tool Analysis**: Briefly analyze the tools and their associated tasks, focusing on how they work together to accomplish an overall goal.
 2. **Cross-Tool Workflow**: Describe the workflow showing how tools will be used together to accomplish an overall goal.
-3. **Target Tools**: The specific tool names that must be used to solve the question, in the order they would likely be called, with their server names.
-4. **Question**: A clear, realistic user question that requires tool usage.
+3. **Target Tasks**: The specific tasks and their task IDs that must be completed to solve the question.
+4. **Target Tools**: The specific tools and their server names that must be used to solve the question, in the order they would likely be called.
+5. **Question**: A clear, realistic user question that requires tool usage.
 
 ## Available Tools
 
@@ -59,8 +60,11 @@ Ensure your question requires all {NUM_TOOLS} tools to solve completely. Provide
   <cross_tool_workflow>
     <!-- Describe the workflow showing how tools will be used together to solve the question. -->
   </cross_tool_workflow>
+  <target_tasks>
+    <!-- The specific tasks and their task IDs that must be completed to solve the question. e.g., <task id="8823">Direct or coordinate an organization's financial or budget activities to fund operations, maximize investments, or increase efficiency.</task> <task id="8824">Confer with board members, organization officials, or staff members to discuss issues, coordinate activities, or resolve problems.</task> -->
+  </target_tasks>
   <target_tools>
-    <!-- The specific tool names that should be used together, listed in order with their server names. e.g., <tool server="Server1">search_posts</tool> <tool server="Server2">send_email</tool> -->
+    <!-- The specific tools and their server names that should be used together, listed in order with their server names. e.g., <tool server="Server1">search_posts</tool> <tool server="Server2">send_email</tool> -->
   </target_tools>
   <question>
     <!-- A clear, realistic user question that requires multi-server tool usage spanning different services/domains. -->
