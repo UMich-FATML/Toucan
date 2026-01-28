@@ -9,7 +9,6 @@ import numpy as np
 from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 import faiss
-import xml.etree.ElementTree as ET
 import shutil
 from utils import clean_json_object, clean_html_comments, create_preview_json
 
@@ -122,48 +121,61 @@ def filter_metadata_by_target_tools(metadata, target_tools_str):
 
     return filtered_metadata
 
-def parse_xml_response(response_content, metadata=None):
+def parse_json_response(response_content, metadata=None):
     """
-    Parse the XML response from the assistant to extract server_analysis, target_tools, and question.
+    Parse the JSON response from the assistant to extract tool_analysis, cross_tool_workflow, target_tools, and question.
 
-    onet format:
-    <response>
-      <server_analysis>...</server_analysis>
-      <cross_server_workflow>...</cross_server_workflow>
-      <target_tools>...</target_tools>
-      <question>...</question>
-    </response>
+    Expected JSON format:
+    {
+      "tool_analysis": "...",
+      "cross_tool_workflow": "...",
+      "target_tasks": [...],
+      "target_tools": [...],
+      "question": "..."
+    }
     """
     try:
         # Clean up the response content
         response_content = response_content.strip()
 
-        # Try to find the response XML block
-        response_match = re.search(r'<response>(.*?)</response>', response_content, re.DOTALL)
-
-        if not response_match:
-            # If no response tags found, try to extract individual components
-            return extract_individual_components(response_content, metadata)
+        # Try to extract JSON from markdown code blocks
+        json_match = re.search(r'```json\s*(.*?)\s*```', response_content, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
         else:
-            response_xml = response_match.group(1)
-            return extract_individual_components(response_xml, metadata)
+            # Try to find JSON object directly
+            json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+            else:
+                print("No JSON object found in response")
+                return None
 
+        # Parse JSON
+        parsed_json = json.loads(json_str)
+
+        # Extract components from JSON
+        return extract_individual_components(parsed_json, metadata)
+
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON response: {e}")
+        return None
     except Exception as e:
-        print(f"Error parsing XML response: {e}")
+        print(f"Error parsing JSON response: {e}")
         return None
 
-def extract_individual_components(response_xml, metadata=None):
+def extract_individual_components(parsed_json, metadata=None):
     """
-    Extract individual components from XML for onet mode.
-    Only extracts new field names: tool_analysis and cross_tool_workflow.
+    Extract individual components from JSON for onet mode.
+    Extracts: tool_analysis, cross_tool_workflow, target_tools, and question.
     """
-    # Extract only new field names
-    tool_analysis = extract_xml_content(response_xml, 'tool_analysis')
-    cross_tool_workflow = extract_xml_content(response_xml, 'cross_tool_workflow')
+    # Extract fields from JSON
+    tool_analysis = parsed_json.get('tool_analysis', '')
+    cross_tool_workflow = parsed_json.get('cross_tool_workflow', '')
+    question = parsed_json.get('question', '')
 
-    # Extract target tools and question
-    target_tools = extract_xml_tools(response_xml, metadata)
-    question = extract_xml_content(response_xml, 'question')
+    # Extract and convert target_tools from JSON array format to comma-separated string
+    target_tools = extract_json_tools(parsed_json.get('target_tools', []), metadata)
 
     # Validate that we have all required components
     if not all([tool_analysis, target_tools, question]):
@@ -176,53 +188,16 @@ def extract_individual_components(response_xml, metadata=None):
         "question": clean_html_comments(question.strip())
     }
 
-def extract_xml_content(text, tag):
+
+def extract_json_tools(target_tools_array, metadata=None):
     """
-    Extract content from XML tags, handling both with and without CDATA.
-    """
-    # Try with CDATA first
-    pattern = f'<{tag}>\\s*<!\\[CDATA\\[(.*?)\\]\\]>\\s*</{tag}>'
-    match = re.search(pattern, text, re.DOTALL)
-    if match:
-        return match.group(1)
-
-    # Try without CDATA
-    pattern = f'<{tag}>(.*?)</{tag}>'
-    match = re.search(pattern, text, re.DOTALL)
-    if match:
-        return match.group(1)
-
-    # Try with comments format (from the template)
-    pattern = f'<{tag}>\\s*<!--.*?-->\\s*(.*?)\\s*</{tag}>'
-    match = re.search(pattern, text, re.DOTALL)
-    if match:
-        return match.group(1)
-
-    return ""
-
-def extract_xml_tools(text, metadata=None):
-    """
-    Extract target tools from XML format for onet mode.
-    Expected format: <target_tools><tool server="Server1">search</tool><tool server="Server2">fetch</tool></target_tools>
+    Extract target tools from JSON array format for onet mode.
+    Expected format: [{"server": "Server1", "tool": "search", "arguments": {...}}, ...]
 
     Returns: A string with comma-separated tools in format "server_name::tool_name"
              Returns empty string if any tool/server validation fails
     """
-    # First extract the target_tools content
-    try:
-        target_tools_content = extract_xml_content(text, 'target_tools')
-        if not target_tools_content:
-            target_tools_content = extract_xml_content(text, 'target_tool')
-        if not target_tools_content:
-            return ""
-    except Exception as e:
-        return ""
-
-    # Check if we have XML tool tags with server attributes
-    tool_pattern = r'<tool[^>]*server="([^"]*)"[^>]*>(.*?)</tool>'
-    tool_matches = re.findall(tool_pattern, target_tools_content, re.DOTALL)
-
-    if len(tool_matches) == 0:
+    if not isinstance(target_tools_array, list) or len(target_tools_array) == 0:
         return ""
 
     # Helper function to validate server and tool existence
@@ -268,30 +243,37 @@ def extract_xml_tools(text, metadata=None):
 
     tools_list = []
 
-    for server, tool_name in tool_matches:
-        tool_name = tool_name.strip()
-        if tool_name:
-            # Validate server and tool existence
-            validated_server, validated_tool, is_valid = validate_server_tool(server.strip(), tool_name, metadata)
+    for tool_obj in target_tools_array:
+        if not isinstance(tool_obj, dict):
+            continue
 
-            if not is_valid:
-                print(f"Warning: Tool '{tool_name}' not found in server '{server}' or server not found in metadata. Skipping entire input.")
-                return ""  # Return empty string to skip entire input
+        server_name = tool_obj.get('server', '').strip()
+        tool_name = tool_obj.get('tool', '').strip()
 
-            # Use server_name::tool_name format
-            if validated_server and validated_server.strip():
-                tool_entry = f"{validated_server}::{validated_tool}"
-            else:
-                tool_entry = validated_tool
+        if not tool_name:
+            continue
 
-            tools_list.append(tool_entry)
+        # Validate server and tool existence
+        validated_server, validated_tool, is_valid = validate_server_tool(server_name, tool_name, metadata)
+
+        if not is_valid:
+            print(f"Warning: Tool '{tool_name}' not found in server '{server_name}' or server not found in metadata. Skipping entire input.")
+            return ""  # Return empty string to skip entire input
+
+        # Use server_name::tool_name format
+        if validated_server and validated_server.strip():
+            tool_entry = f"{validated_server}::{validated_tool}"
+        else:
+            tool_entry = validated_tool
+
+        tools_list.append(tool_entry)
 
     return ', '.join(tools_list)
 
 
 def extract_questions(input_file, output_file, preview_file=None):
     """
-    Extract structured questions from assistant responses with XML format for onet mode.
+    Extract structured questions from assistant responses with JSON format for onet mode.
     """
     with open(input_file, 'r', encoding='utf-8') as f_in, open(output_file, 'w', encoding='utf-8') as f_out:
         total_processed = 0
@@ -329,11 +311,11 @@ def extract_questions(input_file, output_file, preview_file=None):
 
                 total_processed += 1
 
-                # Parse the XML response
-                parsed_response = parse_xml_response(assistant_message["content"], metadata)
+                # Parse the JSON response
+                parsed_response = parse_json_response(assistant_message["content"], metadata)
 
                 if not parsed_response:
-                    print(f"Failed to parse XML response for row {total_processed}. Skipping.")
+                    print(f"Failed to parse JSON response for row {total_processed}. Skipping.")
                     continue
 
                 # Check if target_tools is empty (indicating validation failure)
@@ -646,7 +628,7 @@ def prepare_questions(input_file, output_file):
             stats["server_count_distribution"][str(server_count)] = stats["server_count_distribution"].get(str(server_count), 0) + 1
 
             # Prepare question content with optional tool hint
-            # data["target_tools"] contains the output from extract_xml_tools() function
+            # data["target_tools"] contains the output from extract_json_tools() function
             question_content = data["question"]
             if args.enable_tool_hint and data["target_tools"]:
                 question_content = f"{data['question']}\n\nYou need to solve this question using {data['target_tools']} tool from the list of available tools."
@@ -738,7 +720,7 @@ def main():
     prepared_output_review = f"{output_path}/preview_{base_name}_4prepared.json"
 
     # Run all steps in sequence
-    print("Step 1: Extracting questions from XML responses...")
+    print("Step 1: Extracting questions from JSON responses...")
     extract_questions(args.input_file, extracted_output, extracted_output_review)
 
     # Step 2: Sanitization (optional)

@@ -43,7 +43,7 @@ Your response should include:
 1. **Tool Analysis**: Briefly analyze the tools and their associated tasks, focusing on how they work together to accomplish an overall goal.
 2. **Cross-Tool Workflow**: Describe the workflow showing how tools will be used together to accomplish an overall goal.
 3. **Target Tasks**: The specific tasks and their task IDs that must be completed to solve the question.
-4. **Target Tools**: The specific tools and their server names that must be used to solve the question, in the order they would likely be called.
+4. **Target Tools**: The specific tools, their server names, and their input arguments that must be used to solve the question, in the order they would likely be called.
 5. **Question**: A clear, realistic user question that requires tool usage.
 
 ## Available Tools
@@ -51,22 +51,20 @@ Your response should include:
 {TOOL_DESCRIPTIONS}
 
 ## Output
-Ensure your question requires all {NUM_TOOLS} tools to solve completely. Provide your response in the following XML format:
+Ensure your question requires all {NUM_TOOLS} tools to solve completely. Provide your response in the following JSON format:
 
-<response>
-  <tool_analysis>
-    <!-- Briefly analyze the tools and their associated tasks, focusing on how they work together to accomplish an overall goal. -->
-  </tool_analysis>
-  <cross_tool_workflow>
-    <!-- Describe the workflow showing how tools will be used together to solve the question. -->
-  </cross_tool_workflow>
-  <target_tasks>
-    <!-- The specific tasks and their task IDs that must be completed to solve the question. e.g., <task id="8823">Direct or coordinate an organization's financial or budget activities to fund operations, maximize investments, or increase efficiency.</task> <task id="8824">Confer with board members, organization officials, or staff members to discuss issues, coordinate activities, or resolve problems.</task> -->
-  </target_tasks>
-  <target_tools>
-    <!-- The specific tools and their server names that should be used together, listed in order with their server names. e.g., <tool server="Server1">search_posts</tool> <tool server="Server2">send_email</tool> -->
-  </target_tools>
-  <question>
-    <!-- A clear, realistic user question that requires multi-server tool usage spanning different services/domains. -->
-  </question>
-</response> 
+```json
+{
+  "tool_analysis": "Briefly analyze the tools and their associated tasks, focusing on how they work together to accomplish an overall goal.",
+  "cross_tool_workflow": "Describe the workflow showing how tools will be used together to solve the question.",
+  "target_tasks": [
+    {"id": "8823", "description": "Direct or coordinate an organization's financial or budget activities to fund operations, maximize investments, or increase efficiency."},
+    {"id": "8824", "description": "Confer with board members, organization officials, or staff members to discuss issues, coordinate activities, or resolve problems."}
+  ],
+  "target_tools": [
+    {"server": "Server1", "tool": "get_weather", "arguments": {"location": "Paris, France "}},
+    {"server": "Server2", "tool": "send_email", "arguments": {"to": "bob@email.com","body": "Hi bob"}}
+  ],
+  "question": "A clear, realistic user question that requires multi-server tool usage spanning different services/domains."
+}
+``` 
