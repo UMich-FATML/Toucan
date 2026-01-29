@@ -426,8 +426,8 @@ if __name__ == "__main__":
   #################
   # Create output file / folder
   #################
-  output_filename = f"ToolUse_s2q_onet_{args.total_prompts}_{args.num_tools}tool_{args.timestamp}_prepared.jsonl"
-  output_foldername = f"ToolUse_onet_{args.total_prompts}_{args.num_tools}tool_{args.timestamp}"
+  output_foldername = f"onet_{args.num_tools}_tools_{args.total_prompts}_{args.timestamp}"
+  output_filename = f"{output_foldername}_prepared.jsonl"
 
   if not args.job_name:
     if not os.path.exists(args.output_folder):
@@ -472,7 +472,7 @@ if __name__ == "__main__":
     combos_for_parquet.append(combo_record)
 
   combos_parquet_df = pd.DataFrame(combos_for_parquet)
-  parquet_path = f"{args_output_dir}/occupation_tool_combos.parquet"
+  parquet_path = f"{args_output_dir}/combos.parquet"
   combos_parquet_df.to_parquet(parquet_path, index=False)
   print(f"Combinations dataframe saved to: {parquet_path}")
 
