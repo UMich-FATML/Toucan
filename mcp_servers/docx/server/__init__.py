@@ -1,0 +1,1 @@
+# DOCX MCP Server package
