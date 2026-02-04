@@ -261,7 +261,7 @@ def format_tasks(sampled_tools):
   return '\n'.join(f"  - {task}" for task in sorted(tasks_set))
 
 
-def format_tool_descriptions(sampled_tools, onet_code):
+def format_tool_descriptions(sampled_tools, onet_code, mcp_servers_dir):
   """
   Format tool descriptions with name, description, relevant tasks, and server info.
 
@@ -272,33 +272,66 @@ def format_tool_descriptions(sampled_tools, onet_code):
   Returns:
     str: Formatted tool descriptions
   """
-  descriptions = []
+  # ... inside the loop where you format tool descriptions ...
 
-  for i, tool_entry in enumerate(sampled_tools, 1):
-    tool_record = tool_entry['tool_record']
-    relevant_tasks = tool_entry.get('relevant_tasks', [])
+  tool_descriptions = []
+  
+  # Cache loaded server files to avoid re-reading
+  server_cache = {}
 
-    tool_name = tool_record.get('tool_name', 'Unknown Tool')
-    tool_desc = tool_record.get('tool_description', 'No description available')
-    server_name = tool_record.get('server_name', 'Unknown Server')
-    server_analysis = tool_record.get('server_analysis', 'No analysis available')
+  for t in sampled_tools:
+      record = t['tool_record']
+      server_filename = record.get('server_filename')
+      
+      # 1. Try to get schema from the record first
+      schema = record.get('input_schema') or record.get('inputSchema') or record.get('parameters')
+      
+      # 2. FALLBACK: If missing, load from the actual MCP server file
+      if not schema and server_filename:
+          if server_filename not in server_cache:
+              try:
+                  with open(os.path.join(mcp_servers_dir, server_filename), 'r') as f:
+                      server_cache[server_filename] = json.load(f)
+              except Exception:
+                  server_cache[server_filename] = {}
+          
+          # Look for the tool in the loaded server data
+          server_data = server_cache[server_filename]
+          # Check both locations
+          candidates = (
+              server_data.get('metadata', {}).get('remote_server_response', {}).get('tools', []) + 
+              server_data.get('metadata', {}).get('server_info_crawled', {}).get('tools', [])
+          )
+          
+          for tool_def in candidates:
+              if tool_def.get('name') == record.get('tool_name'):
+                  schema = tool_def.get('input_schema')
+                  break
 
-    # Format relevant tasks
-    if relevant_tasks:
-      tasks_formatted = '\n'.join(f"  - {task.get('task', '')}" for task in relevant_tasks if task.get('task'))
-    else:
-      tasks_formatted = "  - (No specific tasks for this occupation)"
+      # 3. Extract Properties (Standard Logic)
+      schema = schema or {}
+      params = schema.get('properties', {})
+      required = schema.get('required', [])
+      
+      # Handle Nested Wrappers (OpenAI style)
+      if not params and 'parameters' in schema:
+          params = schema['parameters'].get('properties', {})
+          required = schema['parameters'].get('required', [])
 
-    tool_section = f"""### Tool {i}: {tool_name}
-**Server**: {server_name}
-**Server Analysis**: {server_analysis}
-**Description**: {tool_desc}
-**Relevant Tasks for this Occupation**:
-{tasks_formatted}
-"""
-    descriptions.append(tool_section)
+      schema_str = json.dumps({
+          "parameters": params,
+          "required_fields": required
+      }, indent=2)
 
-  return '\n'.join(descriptions)
+      desc = (
+          f"Server: {record.get('server_name')}\n"
+          f"Tool: {record.get('tool_name')}\n"
+          f"Description: {record.get('description')}\n"
+          f"Strict Argument Schema:\n{schema_str}\n" 
+      )
+      tool_descriptions.append(desc)
+
+  return "\n---\n".join(tool_descriptions)
 
 
 ################
@@ -512,7 +545,11 @@ if __name__ == "__main__":
 
     # Format template placeholders
     tasks_formatted = format_tasks(sampled_tools)
-    tool_descriptions_formatted = format_tool_descriptions(sampled_tools, onet_code)
+    # Old
+    # tool_descriptions_formatted = format_tool_descriptions(sampled_tools, onet_code)
+
+    # New
+    tool_descriptions_formatted = format_tool_descriptions(sampled_tools, onet_code, mcp_servers_dir)
 
     # Fill in the template
     seed_prompt = prompt_template.replace("{NUM_TOOLS}", str(args.num_tools))
