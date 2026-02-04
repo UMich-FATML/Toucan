@@ -1,8 +1,13 @@
 ## Task
-Generate a **Tool Use Question** based on featured MCP Servers and their tool descriptions.
+Generate a **Tool Use Question** and the **Correct Tool Calls** based on featured MCP Servers and their tool descriptions.
 
 ## Objective
 Brainstorm a compelling real-world scenario, then analyze the provided tools and their associated tasks to create a realistic user question that naturally requires the use of **all {NUM_TOOLS} tools** to solve completely.
+
+## Available Tools & Schemas
+**CRITICAL:** You must study the "Strict Argument Schema" for each tool below. Your generated `target_tools` must VALIDLY match these schemas (correct parameter names, data types, and required fields).
+
+{TOOL_DESCRIPTIONS}
 
 ## Guidelines
 
@@ -11,6 +16,11 @@ Brainstorm a compelling real-world scenario, then analyze the provided tools and
 - Consider workplace tasks that {OCCUPATION} performs such as (but not limited to):
 {TASKS}
 - The scenario should be detailed and authentic, representing genuine use cases that consists of multiple tasks
+
+### Strict Tool Call Generation
+- **Do not hallucinate arguments.** Only use parameters explicitly listed in the "Strict Argument Schema" above.
+- **Respect Required Fields.** If a field is listed in `required_fields`, you MUST include it.
+- **Format tool arguments correctly** The `arguments` value of a target_tools entry must be a valid JSON.
 
 ### Question Realism
 - Create questions that represent real-world scenarios where users genuinely need multiple tools
@@ -43,12 +53,8 @@ Your response should include:
 1. **Tool Analysis**: Briefly analyze the tools and their associated tasks, focusing on how they work together to accomplish an overall goal.
 2. **Cross-Tool Workflow**: Describe the workflow showing how tools will be used together to accomplish an overall goal.
 3. **Target Tasks**: The specific tasks and their task IDs that must be completed to solve the question.
-4. **Target Tools**: The specific tools, their server names, and their input arguments that must be used to solve the question, in the order they would likely be called.
+4. **Target Tools**: The specific tools, their server names, and their input arguments that must be used to solve the question, in the order they would likely be called. The input arguments MUST BE A VALID JSON.
 5. **Question**: A clear, realistic user question that requires tool usage.
-
-## Available Tools
-
-{TOOL_DESCRIPTIONS}
 
 ## Output
 Ensure your question requires all {NUM_TOOLS} tools to solve completely. Provide your response in the following JSON format:
