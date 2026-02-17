@@ -67,10 +67,17 @@ elif [[ "$model_path" == *"Devstral-Small"* ]]; then
     export VLLM_ATTENTION_BACKEND=XFORMERS
     vllm_extra_args+=(--tokenizer_mode mistral --config_format mistral --load_format mistral --tool-call-parser mistral --enable-auto-tool-choice --tensor-parallel-size 4 --gpu-memory-utilization 0.9)
     echo -e "${BLUE}[start_vllm] Applying XFORMERS backend for Devstral-Small${NC}" >&2
-elif [[ "$model_path" == *"Kimi-K2"* ]]; then
-    vllm_extra_args+=(--tensor-parallel-size 8 --enable-auto-tool-choice --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --trust-remote-code)
+elif [[ "$model_path" == *"Kimi-K2-Thinking"* ]]; then
+    vllm_extra_args+=(--tensor-parallel-size 8 --decode-context-parallel-size 8 --enable-auto-tool-choice --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --trust-remote-code)
     echo -e "${BLUE}[start_vllm] Applying Kimi-K2-Thinking configuration${NC}" >&2
+elif [[ "$model_path" == *"Kimi-K2.5"* ]]; then
+    vllm_extra_args+=(--tensor-parallel-size 8 --mm-encoder-tp-mode data --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --trust-remote-code)
+    echo -e "${BLUE}[start_vllm] Applying Kimi-K2.5 configuration${NC}" >&2
 fi
+
+# --- Activate conda environment ---
+eval "$(conda shell.bash hook)"
+conda activate vllm
 
 # --- Start vLLM server ---
 echo -e "${BLUE}[start_vllm] Starting vLLM server for ${model_path}...${NC}" >&2
