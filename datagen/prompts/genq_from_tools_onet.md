@@ -1,5 +1,5 @@
 ## Task
-Generate a **Tool Use Question** based on featured MCP Servers and their tool descriptions.
+Generate a **Tool Use Question** based on provided tools and their descriptions.
 
 ## Objective
 Brainstorm a compelling real-world scenario, then analyze the provided tools and their associated tasks to create a realistic user question that naturally requires the use of **all {NUM_TOOLS} tools** to solve completely.
@@ -43,10 +43,10 @@ Your response should include:
 1. **Tool Analysis**: Briefly analyze the tools and their associated tasks, focusing on how they work together to accomplish an overall goal.
 2. **Cross-Tool Workflow**: Describe the workflow showing how tools will be used together to accomplish an overall goal.
 3. **Target Tasks**: The specific tasks and their task IDs that must be completed to solve the question.
-4. **Target Tools**: The specific tools, their server names, and their input arguments that must be used to solve the question, in the order they would likely be called.
+4. **Target Tools**: The specific tools, their server names, and their input arguments that must be used to solve the question, in the order they would likely be called. The input arguments MUST follow the tool's Input Schema exactly — do not invent or rename parameters.
 5. **Question**: A clear, realistic user question that requires tool usage.
 
-## Available Tools
+## Provided Tools
 
 {TOOL_DESCRIPTIONS}
 

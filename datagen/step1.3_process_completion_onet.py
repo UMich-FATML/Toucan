@@ -10,6 +10,7 @@ from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 import faiss
 import shutil
+from jsonschema import Draft7Validator
 from utils import clean_json_object, clean_html_comments, create_preview_json
 
 ################
@@ -189,6 +190,54 @@ def extract_individual_components(parsed_json, metadata=None):
     }
 
 
+def get_tool_input_schema(metadata, server_name, tool_name):
+    """Retrieve the input_schema for a tool from metadata."""
+    if not metadata or 'mcp_servers' not in metadata:
+        return None
+
+    for server_info in metadata.get('mcp_servers', []):
+        if server_info.get('server_name') == server_name:
+            tools = server_info.get('remote_server_response', {}).get('tools', [])
+            for tool in tools:
+                if tool.get('name') == tool_name:
+                    return tool.get('input_schema')
+    return None
+
+
+def validate_tool_arguments(arguments, input_schema, tool_name="", server_name=""):
+    """
+    Validate tool arguments against JSON Schema input_schema.
+    Returns: {"is_valid": bool, "errors": [...], "warnings": [...]}
+    """
+    result = {"is_valid": True, "errors": [], "warnings": []}
+
+    if arguments is None:
+        arguments = {}
+
+    if not input_schema or not isinstance(input_schema, dict):
+        # No schema to validate against - pass through
+        return result
+
+    try:
+        validator = Draft7Validator(input_schema)
+        for error in validator.iter_errors(arguments):
+            error_info = {
+                "property": ".".join(str(p) for p in error.absolute_path) or "(root)",
+                "message": error.message
+            }
+            # Treat additionalProperties as warning only
+            if error.validator == "additionalProperties":
+                result["warnings"].append(error_info)
+            else:
+                result["errors"].append(error_info)
+
+        result["is_valid"] = len(result["errors"]) == 0
+    except Exception as e:
+        result["warnings"].append({"property": None, "message": str(e)})
+
+    return result
+
+
 def extract_json_tools(target_tools_array, metadata=None):
     """
     Extract target tools from JSON array format for onet mode.
@@ -259,6 +308,21 @@ def extract_json_tools(target_tools_array, metadata=None):
         if not is_valid:
             print(f"Warning: Tool '{tool_name}' not found in server '{server_name}' or server not found in metadata. Skipping entire input.")
             return ""  # Return empty string to skip entire input
+
+        # Validate arguments against schema
+        arguments = tool_obj.get('arguments', {})
+        input_schema = get_tool_input_schema(metadata, validated_server, validated_tool)
+        validation_result = validate_tool_arguments(arguments, input_schema, validated_tool, validated_server)
+
+        for error in validation_result["errors"]:
+            print(f"Warning: Argument validation error for {validated_server}::{validated_tool} - {error['message']}")
+
+        for warning in validation_result["warnings"]:
+            print(f"Info: {validated_server}::{validated_tool} - {warning['message']}")
+
+        if not validation_result["is_valid"]:
+            print(f"Warning: Argument validation failed for {validated_server}::{validated_tool}. Skipping entire input.")
+            return ""
 
         # Use server_name::tool_name format
         if validated_server and validated_server.strip():
