@@ -192,6 +192,7 @@ def create_server_metadata_index(tasks_list, mcp_servers_dir):
 
   server_index = {}
   missing = 0
+  skipped_validation = 0
   for server_id in sorted(server_ids):
     file_path = os.path.join(mcp_servers_dir, f"{server_id}.json")
     if not os.path.exists(file_path):
@@ -200,12 +201,17 @@ def create_server_metadata_index(tasks_list, mcp_servers_dir):
     try:
       with open(file_path, 'r') as f:
         data = json.load(f)
+      # Skip servers with validation errors
+      validation_error = data.get('server', {}).get('validation_error')
+      if validation_error is not None:
+        skipped_validation += 1
+        continue
       server_index[server_id] = data
     except (json.JSONDecodeError, OSError) as e:
       print(f"Warning: Could not load {file_path}: {e}")
       missing += 1
 
-  print(f"Loaded {len(server_index)} server metadata files ({missing} missing/failed)")
+  print(f"Loaded {len(server_index)} server metadata files ({missing} missing/failed, {skipped_validation} skipped due to validation errors)")
   return server_index
 
 

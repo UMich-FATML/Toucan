@@ -190,28 +190,24 @@ def is_valid_entry(data, file_path):
     check_multi_turn_only = len([msg for msg in messages if msg.get("role") == "user"]) > 1 and "question_split" not in file_path
     
     # Rule 1: Must have system prompt (agent successfully started)
+    # Filters infrastructure failures where MCP server connection failed
     if not has_system_prompt(messages):
         return False, "no_system_prompt"
-    
-    # Rule 2: Must have tool calls
-    if not has_tool_calls(messages):
-        return False, "no_tool_calls"
-    
-    # Rule 3: Must have at least one successful tool response
-    if not has_no_error_in_tool_responses(messages, check_multi_turn_only):
-        return False, "no_successful_tool_response"
-    
-    # Rule 4: Must not have errors in assistant responses
-    if has_error_in_assistant_responses(messages):
-        return False, "error_in_assistant_response"
-    
-    # Rule 5: Must not have an empty final assistant message
+
+    # Rule 2: Must not have an empty final assistant message
+    # Filters framework/timeout issues, not meaningful agent behavior
     if has_empty_final_assistant_message(messages):
         return False, "empty_final_assistant_message"
-    
-    # Rule 6: Must not have exclamation marks in assistant messages
+
+    # Rule 3: Must not have degenerate output (exclamation marks)
     if has_exclamation_marks_in_assistant_messages(messages):
         return False, "exclamation_marks_in_assistant_message"
+
+    # NOTE: We intentionally keep trajectories where the agent:
+    # - Made no tool calls (failed to use tools → should score 0)
+    # - Got error responses from tools (wrong tool usage → should score 0)
+    # - Had errors in assistant messages (agent acknowledged failure → valid trajectory)
+    # These are real agent failures that should be evaluated, not filtered out.
     
     return True, "valid"
 
@@ -227,9 +223,6 @@ def filter_completions(input_file, output_file, preview_file=None):
         "valid_entries": 0,
         "filtered_out": {
             "no_system_prompt": 0,
-            "no_tool_calls": 0,
-            "no_successful_tool_response": 0,
-            "error_in_assistant_response": 0,
             "empty_final_assistant_message": 0,
             "exclamation_marks_in_assistant_message": 0
         }

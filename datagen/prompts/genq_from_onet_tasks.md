@@ -22,6 +22,17 @@ The following tools are available from MCP servers matched to the tasks above. U
 
 {TOOL_DESCRIPTIONS}
 
+## ⚠️ Important: Tool Execution and Validation
+
+**You have access to the actual MCP tools listed above.** Before finalizing your response, you MUST:
+1. Draft a realistic question grounded in the workplace tasks
+2. Identify the specific tools and arguments needed to answer the question
+3. **Actually execute each tool** with the specified arguments to verify it works correctly
+4. Ensure the tool outputs are relevant and useful for answering the question
+5. Include the tool execution results in your final response
+
+This validation step ensures the generated question can actually be solved using the available tools with the specified arguments.
+
 ## Guidelines
 
 ### Scenario Grounding
@@ -36,12 +47,14 @@ The following tools are available from MCP servers matched to the tasks above. U
 - Include relevant context, constraints, and details that make the question engaging
 - Draw on the occupation's knowledge domains and skills to make the scenario authentic
 
-### Tool Integration
+### Tool Integration and Validation
 - Each tool should serve as a means to accomplish one or more of the workplace tasks
+- **Execute each tool** with realistic arguments to verify it works before including it
 - Consider how data flows between tools (e.g., output from one tool feeds into another)
 - The tools should create a logical, interconnected workflow that addresses the tasks
 - Consider each tool and its parent MCP server's descriptions when crafting the workflow
-- Do not include exact tool names or server names in the question
+- Do not include exact tool names or server names in the question itself
+- **Verify that tool outputs are relevant** to answering the question you've drafted
 
 ### Question Complexity
 - The question should have multiple components corresponding to the workplace tasks
@@ -53,23 +66,37 @@ Your response should include:
 1. **Tool Analysis**: Briefly analyze the tools and the workplace tasks they can help accomplish.
 2. **Cross-Tool Workflow**: Describe the workflow showing how tools will be used together to accomplish the workplace tasks.
 3. **Target Tasks**: The specific workplace tasks and their task IDs that the question addresses.
-4. **Target Tools**: The specific tools, their server names, and their input arguments that must be used, in the order they would likely be called. The input arguments MUST follow the tool's Input Schema exactly — do not invent or rename parameters.
+4. **Target Tools**: The specific tools, their server names, their input arguments, AND the actual output from executing each tool. Tools should be listed in the order they would likely be called. The input arguments MUST follow the tool's Input Schema exactly — do not invent or rename parameters.
 5. **Question**: A clear, realistic user question that requires tool usage to accomplish the workplace tasks.
 
 ## Output
-Ensure your question is grounded in all {NUM_TASKS} workplace tasks and uses the available tools to accomplish them. Provide your response in the following JSON format:
+Ensure your question is grounded in all {NUM_TASKS} workplace tasks and uses the available tools to accomplish them.
+
+**Remember to actually execute each tool and include the output in your response.**
+
+Provide your response in the following JSON format:
 
 ```json
 {
-  "tool_analysis": "Briefly analyze the tools and how they help accomplish the workplace tasks. If more than one ",
+  "tool_analysis": "Briefly analyze the tools and how they help accomplish the workplace tasks.",
   "cross_tool_workflow": "Describe the workflow showing how tools will be used together to accomplish the workplace tasks.",
   "target_tasks": [
     {"id": "8823", "description": "Direct or coordinate an organization's financial or budget activities to fund operations, maximize investments, or increase efficiency."},
     {"id": "8824", "description": "Confer with board members, organization officials, or staff members to discuss issues, coordinate activities, or resolve problems."}
   ],
   "target_tools": [
-    {"server": "Server1", "tool": "get_weather", "arguments": {"location": "Paris, France"}},
-    {"server": "Server2", "tool": "send_email", "arguments": {"to": "bob@email.com", "body": "Hi bob"}}
+    {
+      "server": "Server1",
+      "tool": "get_weather",
+      "arguments": {"location": "Paris, France"},
+      "output": "Temperature: 18°C, Conditions: Partly cloudy, Humidity: 65%"
+    },
+    {
+      "server": "Server2",
+      "tool": "send_email",
+      "arguments": {"to": "bob@email.com", "body": "Hi bob"},
+      "output": "Email sent successfully to bob@email.com"
+    }
   ],
   "question": "A clear, realistic user question grounded in the workplace tasks that requires multi-tool usage."
 }

@@ -24,10 +24,18 @@ from wrapt_timeout_decorator import timeout
 from utils import load_dataset_from_file, save_dataset, make_api_request_with_retry, get_model_short_name, validate_api_pool_from_file, check_if_api_key_is_valid, safe_save_checkpoint, get_model_abbreviation
 
 
+# Suppress OpenAI Agent SDK tracing logs before importing
+import logging
+logging.getLogger("openai.agents").setLevel(logging.ERROR)
+logging.getLogger("agents").setLevel(logging.ERROR)
+os.environ.setdefault("OPENAI_AGENTS_DISABLE_TRACING", "1")
+
 # OpenAI Agent imports
 from agents.mcp import MCPServerStreamableHttp
 from agents.run_context import RunContextWrapper
 from agents import Agent, OpenAIResponsesModel, Runner, SQLiteSession
+from agents.tracing import set_tracing_disabled
+set_tracing_disabled(True)
 from openai import AsyncClient
 from typing import Dict, Any, List, Optional
 from pydantic import create_model, Field, BaseModel
@@ -143,6 +151,12 @@ if args.num_trials > 1:
 else:
     checkpoint_file = f"{base_name}_{config_str}_results_checkpoint.json"
     saved_file = f"{base_name}_{config_str}_results.jsonl"
+
+# Resolve API keys from env vars before setting up headers
+if args.engine == "openrouter_api" and not args.openrouter_api_key:
+    args.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
+    if not args.openrouter_api_key:
+        print("⚠️  Warning: OpenRouter API Key is missing! (Env var OPENROUTER_API_KEY not found)")
 
 # API Setups
 if args.engine == "openrouter_api":
@@ -444,6 +458,51 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
     
     return all_messages
 
+def construct_mcp_url_from_source(server_info, api_key=None, profile=None):
+    """
+    Construct MCP server URL from step 1.1 format data.
+    This handles the case where server_info has source_file_path or server_id
+    instead of a nested server_info dict with python_sdk_url.
+    """
+    if api_key is None:
+        api_key = args.smithery_api_key
+    if profile is None:
+        profile = args.smithery_profile
+
+    deployment_url = None
+
+    # Try loading from source_file_path to get the connection URL
+    source_path = server_info.get('source_file_path', '')
+    if source_path:
+        # Resolve relative path (source_file_path may start with ../)
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            resolved_path = os.path.normpath(os.path.join(script_dir, source_path))
+            if os.path.exists(resolved_path):
+                with open(resolved_path, 'r') as f:
+                    source_data = json.load(f)
+                server_data = source_data.get('server', {})
+                connections = server_data.get('connections', [])
+                if connections:
+                    deployment_url = connections[0].get('deploymentUrl', '')
+                if not deployment_url:
+                    # Fallback to server-level deploymentUrl + /mcp
+                    dep = server_data.get('deploymentUrl', '')
+                    if dep:
+                        deployment_url = dep.rstrip('/') + '/mcp'
+        except Exception as e:
+            print(f"⚠️ Warning: Could not load source file {source_path}: {e}")
+
+    if not deployment_url:
+        return None
+
+    # Build the full URL with config, api_key, and profile
+    config = {"debug": False}
+    config_b64 = base64.b64encode(json.dumps(config).encode()).decode()
+    server_url = f"{deployment_url}?config={config_b64}&api_key={api_key}&profile={profile}"
+    return server_url
+
+
 def create_agent_for_item(item, api_key=None, profile=None):
     """
     Create an OpenAI Agent for an item. 
@@ -522,9 +581,17 @@ def create_agent_for_item(item, api_key=None, profile=None):
     else:
         mcp_servers_list = []
         for server_info in mcp_servers:
+            server_url = None
+
+            # Try existing format first: server_info sub-dict with python_sdk_url
             server_details = server_info.get('server_info', {})
-            server_url = construct_mcp_server_url(server_details, api_key, profile)
-            
+            if server_details:
+                server_url = construct_mcp_server_url(server_details, api_key, profile)
+
+            # Fallback: step 1.1 format with source_file_path or server_id
+            if not server_url:
+                server_url = construct_mcp_url_from_source(server_info, api_key, profile)
+
             if server_url:
                 safe_name = server_info.get('server_name', 'unknown').replace(' ', '-').lower()
                 mcp_servers_list.append({
@@ -645,34 +712,46 @@ async def process_single_item_agent_async(item, api_key=None, profile=None):
             async def create_mcp_servers():
                 mcp_servers = []
                 server_contexts = []
-                
+                failed_servers = []
+
                 for server_config in server_configs:
-                    mcp_server_context = MCPServerStreamableHttp(
-                        name=server_config["name"],
-                        params={
-                            "url": server_config["url"],
-                            "headers": {
-                                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+                    try:
+                        mcp_server_context = MCPServerStreamableHttp(
+                            name=server_config["name"],
+                            params={
+                                "url": server_config["url"],
+                                "headers": {
+                                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+                                },
+                                "timeout": server_config.get("timeout", 600.0),
+                                "sse_read_timeout": server_config.get("sse_read_timeout", 600.0),
+                                "terminate_on_close": server_config.get("terminate_on_close", False)
                             },
-                            "timeout": server_config.get("timeout", 600.0),
-                            "sse_read_timeout": server_config.get("sse_read_timeout", 600.0),
-                            "terminate_on_close": server_config.get("terminate_on_close", False)
-                        },
-                        client_session_timeout_seconds=args.timeout,
-                    )
-                    
-                    # Enter the context and collect both the server and its context
-                    mcp_server = await mcp_server_context.__aenter__()
-                    mcp_servers.append(mcp_server)
-                    server_contexts.append(mcp_server_context)
-                
+                            client_session_timeout_seconds=args.timeout,
+                        )
+
+                        # Enter the context and collect both the server and its context
+                        mcp_server = await mcp_server_context.__aenter__()
+                        mcp_servers.append(mcp_server)
+                        server_contexts.append(mcp_server_context)
+                    except Exception as conn_error:
+                        failed_servers.append(server_config["name"])
+                        print(f"⚠️ Skipping MCP server '{server_config['name']}': {conn_error}")
+
+                if failed_servers:
+                    print(f"   Failed servers: {', '.join(failed_servers)} ({len(mcp_servers)}/{len(server_configs)} connected)")
+
                 return mcp_servers, server_contexts
             
             # Create and manage multiple MCP servers
             try:
                 if server_configs:
                     mcp_servers, server_contexts = await create_mcp_servers()
-                
+
+                # Fail if no MCP servers connected — we require real tool execution
+                if not mcp_servers and not agent_config.get("tools"):
+                    raise Exception(f"All {len(server_configs)} MCP server(s) failed to connect — cannot proceed without real tools")
+
                 try:
                     # Create OpenAI Agent with multiple MCP servers
                     agent_kwargs = {
@@ -690,7 +769,7 @@ async def process_single_item_agent_async(item, api_key=None, profile=None):
                     agent = Agent(**agent_kwargs)
                     run_context = RunContextWrapper(context=None)
                     
-                    print(f"🔍 User Query Passed to Agent: {user_content}")
+                    # print(f"🔍 User Query Passed to Agent: {user_content}")
                     # If this is a multi-turn conversation, populate the session with history
                     if len(message) > 1:
                         # Create a session for conversation management
@@ -731,6 +810,27 @@ async def process_single_item_agent_async(item, api_key=None, profile=None):
                     all_messages = convert_openai_agent_result_to_messages(result, message, system_prompt)
                                     
                     if len(all_messages) > len(message):
+                        # Check for MCP error patterns in the final assistant response
+                        error_patterns = [
+                            "[ERROR: Session terminated]",
+                            "[ERROR: Failed to connect to MCP server",
+                            "[ERROR:",
+                        ]
+                        final_assistant_msgs = [
+                            m for m in all_messages if m.get('role') == 'assistant' and m.get('content')
+                        ]
+                        has_error_response = False
+                        if final_assistant_msgs:
+                            last_content = final_assistant_msgs[-1].get('content', '')
+                            for pattern in error_patterns:
+                                if pattern in last_content and len(last_content.strip()) < 200:
+                                    has_error_response = True
+                                    print(f"⚠️ Agent response for item {prompt_id} contains MCP error: {last_content.strip()}")
+                                    break
+
+                        if has_error_response:
+                            raise Exception(f"Agent response is an MCP error: {last_content.strip()}")
+
                         tool_count = len(mcp_servers) if mcp_servers else len(agent_config.get("tools", []))
                         source_type = "MCP servers" if mcp_servers else "Virtual Tools"
                         print(f"✅ OpenAI agent inference completed for item {prompt_id} with {tool_count} {source_type}\n============================================================")
@@ -815,16 +915,19 @@ class DynamicProcessor:
                 processed_item = process_single_item_agent(item, api_key, profile)
                 return processed_item, item_index, True, None  # success, no error
             except Exception as e:
-                print(f"⚠️ Agent processing failed for item {prompt_id}: {str(e)}")
-                agent_failed = True
+                print(f"❌ Agent processing failed for item {prompt_id}: {str(e)}")
                 agent_error = str(e)
+                # No fallback to direct API — we only want real MCP tool outputs
+                message = item["messages"]
+                item['messages'] = message + [
+                    {
+                        "role": "assistant",
+                        "content": f"[ERROR: Agent failed ({agent_error})]"
+                    }
+                ]
+                return item, item_index, False, f"Agent failed: {agent_error}"
         else:
-            print(f"ℹ️ No agent specified for item {prompt_id}, using direct API...")
-            agent_failed = True
-            agent_error = "No agent specified"
-            
-        # Fallback to direct API call if agent failed or not available
-        if agent_failed:
+            # No agent specified — use direct API (non-agent mode)
             message = item["messages"]
             # remove the system prompt if it exists
             if message[0]['role'] == 'system':
@@ -841,7 +944,7 @@ class DynamicProcessor:
                 input_messages = message[:-1] + [{"role": "user", "content": user_content}]
             else:
                 raise ValueError("Last message is not a user message?")
-            
+
             try:
                 print(f"🔄 Using direct API for item {prompt_id}...")
                 api_response = make_api_request_with_retry(
@@ -850,20 +953,20 @@ class DynamicProcessor:
                     API_ENDPOINT,
                     API_HEADERS,
                 )
-                
+
                 if api_response is not None:
                     response = api_response.strip()
                     item['messages'] = input_messages + [
                         {
-                            "role": "assistant", 
+                            "role": "assistant",
                             "content": response
                         }
                     ]
-                    return item, item_index, True, f"Direct API used: {agent_error}"
+                    return item, item_index, True, f"Direct API used (no agent)"
                 else:
                     # API returned None - treat as failure
                     raise Exception("API request returned None after all retries")
-                
+
             except Exception as e2:
                 print(f"❌ Direct API failed for item {prompt_id}: {str(e2)}")
                 item['messages'] = input_messages + [
@@ -1167,10 +1270,6 @@ def generate_and_update(dataset, checkpoint_file):
 # Main function to control workflow
 def main():
     # Load and validate Smithery API pool
-    if args.engine == "openrouter_api" and not args.openrouter_api_key:
-        args.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-        if not args.openrouter_api_key:
-            print("⚠️  Warning: OpenRouter API Key is missing! (Env var OPENROUTER_API_KEY not found)")
     api_pool = load_and_validate_smithery_api_pool(args.smithery_api_pool)
     
     # Display dynamic processing info

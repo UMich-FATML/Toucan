@@ -168,7 +168,7 @@ def parse_json_response(response_content, metadata=None):
 def extract_individual_components(parsed_json, metadata=None):
     """
     Extract individual components from JSON for onet mode.
-    Extracts: tool_analysis, cross_tool_workflow, target_tools, and question.
+    Extracts: tool_analysis, cross_tool_workflow, target_tools, target_tools_with_outputs, and question.
     """
     # Extract fields from JSON
     tool_analysis = parsed_json.get('tool_analysis', '')
@@ -176,18 +176,25 @@ def extract_individual_components(parsed_json, metadata=None):
     question = parsed_json.get('question', '')
 
     # Extract and convert target_tools from JSON array format to comma-separated string
-    target_tools = extract_json_tools(parsed_json.get('target_tools', []), metadata)
+    target_tools_array = parsed_json.get('target_tools', [])
+    target_tools = extract_json_tools(target_tools_array, metadata)
 
     # Validate that we have all required components
     if not all([tool_analysis, target_tools, question]):
         return None
 
-    return {
+    result = {
         'tool_analysis': tool_analysis.strip(),
         'cross_tool_workflow': cross_tool_workflow.strip() if cross_tool_workflow else "",
         "target_tools": target_tools.strip(),
         "question": clean_html_comments(question.strip())
     }
+
+    # Preserve full target_tools array with outputs if present
+    if target_tools_array and isinstance(target_tools_array, list):
+        result['target_tools_with_outputs'] = target_tools_array
+
+    return result
 
 
 def get_tool_input_schema(metadata, server_name, tool_name):
@@ -197,10 +204,13 @@ def get_tool_input_schema(metadata, server_name, tool_name):
 
     for server_info in metadata.get('mcp_servers', []):
         if server_info.get('server_name') == server_name:
+            # Check both formats: remote_server_response.tools (tool-first) and tools (onet)
             tools = server_info.get('remote_server_response', {}).get('tools', [])
+            if not tools:
+                tools = server_info.get('tools', [])
             for tool in tools:
                 if tool.get('name') == tool_name:
-                    return tool.get('input_schema')
+                    return tool.get('inputSchema') or tool.get('input_schema')
     return None
 
 
@@ -262,14 +272,18 @@ def extract_json_tools(target_tools_array, metadata=None):
         if not isinstance(servers, list):
             return server_name, tool_name, True
 
+        def get_server_tools(server_info):
+            """Get tools from either format: remote_server_response.tools (tool-first) or tools (onet)."""
+            tools = server_info.get("remote_server_response", {}).get("tools", [])
+            if not tools:
+                tools = server_info.get("tools", [])
+            return tools
+
         # First try exact match
         for server_info in servers:
             server_info_name = server_info.get("server_name", "")
             if server_info_name == server_name:
-                # Check if this server has the tool
-                remote_response = server_info.get("remote_server_response", {})
-                server_tools = remote_response.get("tools", [])
-                for tool in server_tools:
+                for tool in get_server_tools(server_info):
                     if tool.get("name", "") == tool_name:
                         return server_name, tool_name, True
 
@@ -280,10 +294,7 @@ def extract_json_tools(target_tools_array, metadata=None):
             for server_info in servers:
                 server_info_name = server_info.get("server_name", "")
                 if server_info_name == server_name_with_suffix:
-                    # Check if this server has the tool
-                    remote_response = server_info.get("remote_server_response", {})
-                    server_tools = remote_response.get("tools", [])
-                    for tool in server_tools:
+                    for tool in get_server_tools(server_info):
                         if tool.get("name", "") == tool_name:
                             return server_name_with_suffix, tool_name, True
 
@@ -362,10 +373,13 @@ def extract_questions(input_file, output_file, preview_file=None):
                 else:
                     mode_counts["unknown"] += 1
 
-                # Find the assistant message
+                # Find the last assistant message with non-empty content.
+                # Agent responses contain multiple assistant messages:
+                # reasoning-only (empty content), function_call (empty content),
+                # and the final response (actual JSON content).
                 assistant_message = None
-                for msg in messages:
-                    if msg.get("role") == "assistant":
+                for msg in reversed(messages):
+                    if msg.get("role") == "assistant" and msg.get("content", "").strip():
                         assistant_message = msg
                         break
 
@@ -444,6 +458,10 @@ def extract_questions(input_file, output_file, preview_file=None):
                         "server_count": get_server_count(filtered_metadata)
                     }
                 }
+
+                # Add target_tools_with_outputs if present (includes actual tool execution outputs)
+                if 'target_tools_with_outputs' in parsed_response:
+                    result["target_tools_with_outputs"] = parsed_response['target_tools_with_outputs']
 
                 # Clean unusual line terminators
                 result = clean_json_object(result)
@@ -585,6 +603,9 @@ def sanitize_questions(input_file, sanitized_output, distance_output, preview_di
     # Only use new field name
     workflows = [item.get('cross_tool_workflow', '') for item in dataset_items]
 
+    # Handle target_tools_with_outputs field (may not exist for all entries)
+    tools_with_outputs = [item.get('target_tools_with_outputs', None) for item in dataset_items]
+
     # Save all questions
     total_rows = 0
     with open(distance_output, 'w', encoding='utf-8') as f_out:
@@ -610,6 +631,10 @@ def sanitize_questions(input_file, sanitized_output, distance_output, preview_di
                 workflow = workflows[idx]
                 if workflow:  # Only add if not empty
                     entry['cross_tool_workflow'] = workflow
+
+            # Add target_tools_with_outputs if it exists
+            if idx < len(tools_with_outputs) and tools_with_outputs[idx] is not None:
+                entry['target_tools_with_outputs'] = tools_with_outputs[idx]
 
             # Clean unusual line terminators
             entry = clean_json_object(entry)
@@ -644,6 +669,10 @@ def sanitize_questions(input_file, sanitized_output, distance_output, preview_di
                     workflow = workflows[idx]
                     if workflow:  # Only add if not empty
                         entry['cross_tool_workflow'] = workflow
+
+                # Add target_tools_with_outputs if it exists
+                if idx < len(tools_with_outputs) and tools_with_outputs[idx] is not None:
+                    entry['target_tools_with_outputs'] = tools_with_outputs[idx]
 
                 # Clean unusual line terminators
                 entry = clean_json_object(entry)
@@ -721,6 +750,10 @@ def prepare_questions(input_file, output_file):
             # Add workflow field to metadata if it exists (only new field name: cross_tool_workflow)
             if "cross_tool_workflow" in data and data["cross_tool_workflow"]:
                 result["metadata"]["cross_tool_workflow"] = data["cross_tool_workflow"]
+
+            # Add target_tools_with_outputs if it exists (includes actual tool execution results)
+            if "target_tools_with_outputs" in data and data["target_tools_with_outputs"]:
+                result["metadata"]["target_tools_with_outputs"] = data["target_tools_with_outputs"]
 
             # Clean unusual line terminators
             result = clean_json_object(result)
