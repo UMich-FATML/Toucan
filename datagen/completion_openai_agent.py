@@ -315,10 +315,11 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
     # Add original user message
     all_messages.extend(original_messages)
     
-    # Process conversation flow from OpenAI Agent  
+    # Process conversation flow from OpenAI Agent
     if hasattr(result, 'new_items') and result.new_items:
         current_reasoning = []  # Collect reasoning content
-        
+        matched_call_ids = set()  # Track which tool calls have been matched to outputs
+
         for item_flow in result.new_items:
             if item_flow.type == "reasoning_item":
                 # Collect reasoning content
@@ -326,7 +327,7 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
                     for content in item_flow.raw_item.content:
                         if hasattr(content, 'text'):
                             current_reasoning.append(content.text)
-            
+
             elif item_flow.type == "tool_call_item":
                 # Extract tool call information
                 if hasattr(item_flow, 'raw_item'):
@@ -335,7 +336,7 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
                         "arguments": getattr(item_flow.raw_item, 'arguments', None),
                         "call_id": getattr(item_flow.raw_item, 'call_id', None)
                     }
-                    
+
                     # Flush reasoning as a separate assistant message before the tool call
                     if current_reasoning:
                         all_messages.append({
@@ -344,16 +345,16 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
                             "reasoning_content": "\n".join(current_reasoning)
                         })
                         current_reasoning = []  # Reset for next iteration
-                    
+
                     # Create assistant message with tool call only
                     assistant_msg = {
                         "role": "assistant",
                         "content": "",
                         "function_call": tool_call
                     }
-                    
+
                     all_messages.append(assistant_msg)
-            
+
             elif item_flow.type == "tool_call_output_item":
                 # Extract tool output
                 if hasattr(item_flow, 'output'):
@@ -368,9 +369,10 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
                             tool_output = item_flow.output
                     except:
                         tool_output = item_flow.output
-                    
+
                     # Find the corresponding tool call name from previous messages
                     tool_name = 'unknown'
+                    matched_call_id = None
                     if hasattr(item_flow, 'raw_item'):
                         raw = item_flow.raw_item
                         call_id = None
@@ -381,21 +383,29 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
                         if call_id is not None:
                             # Look for the matching tool call in previous messages
                             for prev_msg in reversed(all_messages):
-                                if (prev_msg.get('role') == 'assistant' and 
-                                    'function_call' in prev_msg and 
+                                if (prev_msg.get('role') == 'assistant' and
+                                    'function_call' in prev_msg and
                                     prev_msg['function_call'].get('call_id') == call_id):
                                     tool_name = prev_msg['function_call'].get('name', 'unknown')
+                                    matched_call_id = call_id
                                     break
-                    
-                    # Fallback: if still unknown, use the most recent assistant function_call
+
+                    # Fallback: find the oldest unmatched assistant function_call
                     if tool_name == 'unknown':
-                        for prev_msg in reversed(all_messages):
+                        for prev_msg in all_messages:
                             if prev_msg.get('role') == 'assistant' and 'function_call' in prev_msg:
-                                name_candidate = prev_msg['function_call'].get('name')
-                                if name_candidate:
-                                    tool_name = name_candidate
-                                    break
-                    
+                                fc = prev_msg['function_call']
+                                fc_call_id = fc.get('call_id')
+                                if fc_call_id not in matched_call_ids:
+                                    name_candidate = fc.get('name')
+                                    if name_candidate:
+                                        tool_name = name_candidate
+                                        matched_call_id = fc_call_id
+                                        break
+
+                    if matched_call_id is not None:
+                        matched_call_ids.add(matched_call_id)
+
                     all_messages.append({
                         "role": "function",
                         "content": tool_output,
