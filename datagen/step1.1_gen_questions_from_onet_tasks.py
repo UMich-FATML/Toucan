@@ -6,6 +6,7 @@ import random
 import itertools
 import numpy as np
 import pandas as pd
+import requests
 from tqdm import tqdm
 from collections import defaultdict
 from utils import load_jsonl_to_list
@@ -41,8 +42,8 @@ Example Usage:
 Key Parameters:
 - --num_tasks: Number of O*NET tasks to include in each prompt (required)
 - --total_prompts: Total number of prompts to generate (required)
-- --top_k_knowledge: Number of top knowledge domains to include (default 5)
-- --top_k_skills: Number of top skills to include (default 5)
+- --search-endpoint: Optional search API endpoint; when omitted, task references use N/A
+- --search_k: Number of search results to request per task query (default 1)
 - --seed: Random seed (only affects np.random, not combo generation which is deterministic)
 
 Output Files:
@@ -69,6 +70,8 @@ def get_args():
   parser.add_argument("--top_k_knowledge", type=int, default=5, help="Number of top knowledge domains to include.")
   parser.add_argument("--top_k_skills", type=int, default=5, help="Number of top skills to include.")
   parser.add_argument("--mcp_servers_dir", type=str, default="../mcp_servers/smithery_mcp_servers_0210", help="Directory containing MCP server JSON files.")
+  parser.add_argument("--search-endpoint", dest="search_endpoint", type=str, default="", help="Optional search API endpoint for task reference retrieval. If empty, search is disabled.")
+  parser.add_argument("--search_k", type=int, default=1, help="Number of search results to request per task query.")
 
   return parser.parse_args()
 
@@ -321,47 +324,155 @@ def format_skills(skill_items):
   return '\n'.join(f"  - {item['name']} (importance: {item['importance']:.2f})" for item in skill_items)
 
 
-def format_tool_descriptions(tools_by_server, server_index):
+def format_server_descriptions(tools_by_server, server_index):
   """
-  Format tool descriptions from server metadata.
+  Format server descriptions and tool lists from server metadata.
 
   Args:
     tools_by_server: dict mapping server_id to list of tool dicts from that server
     server_index: dict mapping server_id to full server metadata
 
   Returns:
-    str: Formatted tool descriptions
+    str: Formatted MCP server descriptions
   """
-  tool_descs = []
-  tool_num = 1
+  server_descs = []
 
-  for server_id, server_tools in tools_by_server.items():
+  for server_id in sorted(tools_by_server.keys()):
+    server_tools = tools_by_server.get(server_id, [])
     server_data = server_index.get(server_id, {})
     server_info = server_data.get('server', {})
     server_name = server_info.get('displayName', server_info.get('qualifiedName', 'Unknown Server'))
     server_desc = server_info.get('description', 'No description available')
 
-    for tool in server_tools:
+    desc = f"### {server_name}\n"
+    desc += f"**Description**: {server_desc}\n\n"
+    desc += "**Available Tools**:\n"
+
+    for i, tool in enumerate(server_tools, 1):
       tool_name = tool.get('name', 'Unknown Tool')
       tool_desc = tool.get('description', 'No description available')
-      input_schema = tool.get('inputSchema', {})
+      desc += f"{i}. **{tool_name}**: {tool_desc}\n"
 
-      if input_schema:
-        input_schema_str = f"```json\n{json.dumps(input_schema, indent=2)}\n```"
-      else:
-        input_schema_str = "(Not available)"
+    server_descs.append(desc)
 
-      desc = f"""### Tool {tool_num}: {tool_name}
-**Server**: {server_name}
-**Server Description**: {server_desc}
-**Description**: {tool_desc}
-**Input Schema**:
-{input_schema_str}
-"""
-      tool_descs.append(desc)
-      tool_num += 1
+  return '\n'.join(server_descs).strip()
 
-  return '\n'.join(tool_descs)
+
+def extract_top_search_result(search_response):
+  """
+  Extract top search result fields from the search API response.
+
+  Args:
+    search_response: Parsed JSON response from search API
+
+  Returns:
+    dict | None: {'title': str, 'url': str, 'snippet': str} or None
+  """
+  results = None
+  if isinstance(search_response, list):
+    results = search_response
+  elif isinstance(search_response, dict):
+    for key in ['results', 'data', 'items', 'documents', 'hits']:
+      if isinstance(search_response.get(key), list):
+        results = search_response.get(key)
+        break
+
+  if not results:
+    return None
+
+  top = results[0]
+  if not isinstance(top, dict):
+    return {"title": "", "url": "", "snippet": str(top)[:1000]}
+
+  title = top.get('title') or top.get('name') or ""
+  url = top.get('url') or top.get('link') or top.get('source') or ""
+  snippet = (
+    top.get('snippet')
+    or top.get('summary')
+    or top.get('text')
+    or top.get('content')
+    or top.get('fulltext')
+    or top.get('body')
+    or ""
+  )
+  snippet = str(snippet)[:1000] if snippet is not None else ""
+
+  if not title and not url and not snippet:
+    return None
+
+  return {"title": str(title), "url": str(url), "snippet": snippet}
+
+
+def fetch_top_search_result(query, search_endpoint, search_k):
+  """
+  Query search API and return the top result.
+
+  Uses a fixed retry policy with a 1-second wait between retries.
+  """
+  payload = {
+    "query": query,
+    "k": search_k,
+    "rerank": True,
+    "return_fulltext": False
+  }
+
+  max_retries = 3
+  timeout_sec = 30
+  for attempt in range(max_retries):
+    try:
+      response = requests.post(search_endpoint, json=payload, timeout=timeout_sec)
+      response.raise_for_status()
+      search_response = response.json()
+      return extract_top_search_result(search_response)
+    except (requests.RequestException, ValueError) as e:
+      print(f"Search request failed (attempt {attempt + 1}/{max_retries}) for query '{query}': {e}")
+      if attempt < max_retries - 1:
+        time.sleep(1)
+
+  return None
+
+
+def format_task_references(occupation_title, tasks, search_endpoint, search_k):
+  """
+  Retrieve and format search-based task references.
+
+  Args:
+    occupation_title: Occupation title
+    tasks: List of task records
+    search_endpoint: Search API endpoint
+    search_k: Number of results requested per search query
+
+  Returns:
+    str: Concatenated task references
+  """
+  references = []
+  search_enabled = bool(search_endpoint and search_endpoint.strip())
+
+  for task in tasks:
+    task_id = task.get('task_id', '?')
+    task_text = task.get('task', '')
+    query = f"how do {occupation_title} {task_text}"
+    top_result = None
+    if search_enabled:
+      top_result = fetch_top_search_result(query, search_endpoint, search_k)
+
+    ref_lines = [f"### Task {task_id}", f"**Query**: {query}"]
+    if not search_enabled:
+      ref_lines.append("**Top Result**: N/A")
+    elif top_result is None:
+      ref_lines.append("**Top Result**: (Unavailable: search request failed after retries)")
+    else:
+      if top_result.get('title'):
+        ref_lines.append(f"**Title**: {top_result['title']}")
+      if top_result.get('url'):
+        ref_lines.append(f"**URL**: {top_result['url']}")
+      if top_result.get('snippet'):
+        ref_lines.append(f"**Snippet**: {top_result['snippet']}")
+      if not top_result.get('title') and not top_result.get('url') and not top_result.get('snippet'):
+        ref_lines.append("**Top Result**: (No parsable fields returned)")
+    references.append('\n'.join(ref_lines))
+
+  return '\n\n'.join(references)
 
 
 ################
@@ -405,8 +516,6 @@ if __name__ == "__main__":
   #################
   tasks_to_servers_path = "tasks_to_smithery_servers.jsonl"
   occupation_data_path = "onet_db_30_1_text/Occupation Data.txt"
-  knowledge_path = "onet_db_30_1_text/Knowledge.txt"
-  skills_path = "onet_db_30_1_text/Skills.txt"
   prompt_template_path = "prompts/genq_from_onet_tasks.md"
 
   # Load tasks to servers mapping
@@ -417,13 +526,6 @@ if __name__ == "__main__":
   # Load occupation data
   print(f"Loading occupation data from {occupation_data_path}...")
   occupation_dict = load_occupation_data(occupation_data_path)
-
-  # Load knowledge and skills
-  print(f"Loading knowledge domains from {knowledge_path}...")
-  occupation_knowledge = load_onet_attribute(knowledge_path, args.top_k_knowledge)
-
-  print(f"Loading skills from {skills_path}...")
-  occupation_skills = load_onet_attribute(skills_path, args.top_k_skills)
 
   # Load prompt template
   print(f"Loading prompt template from {prompt_template_path}...")
@@ -542,24 +644,26 @@ if __name__ == "__main__":
         "source_file_path": os.path.join(args.mcp_servers_dir, f"{server_id}.json")
       })
 
-    # Look up knowledge and skills for this occupation
-    knowledge_items = occupation_knowledge.get(onet_code, [])
-    skills_items = occupation_skills.get(onet_code, [])
-
     # Format template placeholders
     tasks_str = format_tasks_list(task_combo)
-    knowledge_str = format_knowledge(knowledge_items)
-    skills_str = format_skills(skills_items)
-    tool_descriptions_str = format_tool_descriptions(tools_by_server, server_index)
+    server_descriptions_str = format_server_descriptions(tools_by_server, server_index)
+    task_references_str = format_task_references(
+      occupation_title=occupation_title,
+      tasks=task_combo,
+      search_endpoint=args.search_endpoint,
+      search_k=args.search_k
+    )
 
     # Fill in the template
     prompt = prompt_template.replace("{NUM_TASKS}", str(args.num_tasks))
     prompt = prompt.replace("{OCCUPATION}", occupation_title)
     prompt = prompt.replace("{OCCUPATION_DESCRIPTION}", occupation_description)
-    prompt = prompt.replace("{KNOWLEDGE}", knowledge_str)
-    prompt = prompt.replace("{SKILLS}", skills_str)
     prompt = prompt.replace("{TASKS}", tasks_str)
-    prompt = prompt.replace("{TOOL_DESCRIPTIONS}", tool_descriptions_str)
+    prompt = prompt.replace("{SERVER_DESCRIPTIONS}", server_descriptions_str)
+    prompt = prompt.replace("{TASK_REFERENCES}", task_references_str)
+
+    if "{SERVER_DESCRIPTIONS}" in prompt or "{TASK_REFERENCES}" in prompt:
+      raise ValueError("Prompt template placeholders were not fully resolved.")
 
     # Build matched_servers list for metadata
     matched_servers_meta = []
