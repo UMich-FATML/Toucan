@@ -2,15 +2,18 @@
 #
 # Step 1.2 (O*NET): Run completions for O*NET question generation.
 #
-# Usage: bash step1.2_onet_completion.sh <input_file> [model_path] [step]
+# Usage: bash step1.2_onet_completion.sh <input_file> [model_path] [step] [output_schema_file]
 #
 # This script ALWAYS starts a vLLM server via start_vllm.sh and cleans it up on exit.
 
 input_file=${1}
 model_path=${2:-"/mnt/weka/home/yuekai.sun/.cache/huggingface/hub/models--moonshotai--Kimi-K2-Instruct-0905/snapshots/ac6c49f04883bd0a0598b790693a72061c676629"}
 step=${3:-"1.2_onet"}
-# Extra args (positional $4+) are forwarded to start_vllm.sh
-shift $(( $# < 3 ? $# : 3 ))
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+default_schema_file="${SCRIPT_DIR}/prompts/genq_from_onet_tasks_output_schema.json"
+schema_file=${4:-"${default_schema_file}"}
+# Extra args (positional $5+) are forwarded to start_vllm.sh
+shift $(( $# < 4 ? $# : 4 ))
 vllm_extra_args=("$@")
 
 # Color definitions
@@ -20,12 +23,15 @@ NC='\033[0m'
 
 if [ -z "$input_file" ]; then
     echo "Error: Input file is required."
-    echo "Usage: bash step1.2_onet_completion.sh <input_file> [model_path] [step]"
+    echo "Usage: bash step1.2_onet_completion.sh <input_file> [model_path] [step] [output_schema_file]"
+    exit 1
+fi
+if [ ! -f "$schema_file" ]; then
+    echo "Error: output schema file not found: $schema_file"
     exit 1
 fi
 
 VLLM_PID=""
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo -e "${BLUE}[step1.2_onet] Starting vLLM server via start_vllm.sh...${NC}"
 VLLM_PID=$(bash "${SCRIPT_DIR}/start_vllm.sh" "$model_path" "${vllm_extra_args[@]}")
@@ -45,4 +51,5 @@ python structured_completions_endpoint.py \
     --input_file "${input_file}" \
     --model_path "${model_path}" \
     --engine "vllm_api" \
+    --output_schema_file "${schema_file}" \
     --step "${step}"

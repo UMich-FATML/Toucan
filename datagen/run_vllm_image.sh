@@ -61,10 +61,12 @@ log_file="${log_dir}/$(basename "$log_file")"
 container_name="${image//\//-}"
 container_name="${container_name//:/-}"
 # enroot import produces sqsh filenames with + as separator
+tmp_dir="${TMPDIR:-/tmp}"
+mkdir -p "$tmp_dir"
 sqsh_file="${image//\/\//}"   # strip leading //
 sqsh_file="${sqsh_file//\//-}"
 sqsh_file="${sqsh_file//:/-}"
-sqsh_file="${sqsh_file}.sqsh"
+sqsh_file="${tmp_dir}/${sqsh_file}-${SLURM_JOB_ID:-$$}.sqsh"
 
 if enroot list | grep -qx "$container_name"; then
     echo -e "${BLUE}[start_vllm_docker] Enroot container '$container_name' already exists, skipping import${NC}" >&2
