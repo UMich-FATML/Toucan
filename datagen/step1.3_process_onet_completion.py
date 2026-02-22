@@ -36,6 +36,7 @@ BAD_PATTERNS = (
   "i need more information",
 )
 MIN_QUESTION_LEN = 10
+SUPPORTED_MODE = "onet_tasks"
 
 
 @dataclass

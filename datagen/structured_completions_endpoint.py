@@ -68,7 +68,7 @@ def get_args():
   parser = argparse.ArgumentParser(
     description="Structured O*NET completion endpoint with vLLM response_format."
   )
-  parser.add_argument("--model_path", type=str, required=True, help="Model path.")
+  parser.add_argument("--model_name", type=str, required=True, help="Model name.")
   parser.add_argument("--input_file", type=str, required=True, help="Input prepared file.")
   parser.add_argument("--concurrency", type=int, default=100, help="Max concurrent requests.")
   parser.add_argument(
@@ -127,7 +127,7 @@ except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
 
 print(f"Loaded output schema from: {args.output_schema_file}")
 
-model_abbreviation = get_model_abbreviation(args.model_path)
+model_abbreviation = get_model_abbreviation(args.model_name)
 base_name = args.input_file[: args.input_file.rfind(".")]
 if base_name.endswith("_4prepared"):
   base_name = base_name[:-10]
@@ -155,7 +155,7 @@ def extract_message_text(content):
 
 async def request_completion_async(messages, client):
   payload = {
-    "model": args.model_path,
+    "model": args.model_name,
     "temperature": args.temperature,
     "top_p": args.top_p,
     "messages": messages,
@@ -275,7 +275,7 @@ def add_generation_config_to_metadata(dataset):
   config_entry = {
     "model": model_abbreviation,
     "generation_params": {
-      "model_path": args.model_path,
+      "model_name": args.model_name,
       "concurrency": args.concurrency,
       "temperature": args.temperature,
       "max_tokens": args.max_tokens,
