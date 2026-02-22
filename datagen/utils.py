@@ -609,3 +609,214 @@ def create_preview_json(input_file, output_file, num_entries=5):
         print(f"Preview with {len(preview_data)} entries saved to {output_file}")
     except Exception as e:
         print(f"Error creating preview for {input_file}: {e}")
+
+################
+# Evaluation Utilities
+################
+
+def load_prompt_template(template_path):
+    """Load a prompt template from a markdown file."""
+    with open(template_path, 'r', encoding='utf-8') as f:
+        return f.read()
+
+def derive_answer_key_path(input_path):
+    """
+    Find the *_answer_key.jsonl file in the same directory as the input file.
+    Expects exactly one answer key per directory (standard pipeline convention).
+    Returns None if not found.
+    """
+    import glob as glob_mod
+    dir_name = os.path.dirname(input_path) or "."
+    matches = glob_mod.glob(os.path.join(dir_name, "*_answer_key.jsonl"))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        print(f"Warning: Found {len(matches)} answer key files in {dir_name}, using first match.")
+        return sorted(matches)[0]
+    return None
+
+def extract_raw_error(messages):
+    """
+    Detect if a scenario failed catastrophically.
+    Returns: (is_failed: bool, raw_error_string: str or None)
+
+    Checks (in order):
+      1. Empty trajectory
+      2. Wrapper-caught exceptions ([ERROR: ...], [CRITICAL ERROR: ...], etc.)
+      3. Implicit max-turns exceeded (trailing tool call with no follow-up)
+      4. In-context tool errors (tool not found / unknown tool)
+    """
+    if not messages:
+        return True, "EMPTY_TRAJECTORY"
+
+    last_msg = messages[-1]
+    last_content = str(last_msg.get('content', ''))
+
+    # 1. Wrapper-caught exceptions
+    if "[ERROR:" in last_content or "[CRITICAL ERROR:" in last_content or "[UNEXPECTED_ERROR:" in last_content:
+        return True, last_content.strip()
+
+    # 2. Trailing tool call → max turns
+    if last_msg.get('role') == 'assistant' and ('tool_calls' in last_msg or 'function_call' in last_msg):
+        return True, "MAX_TURNS_EXCEEDED (Trailing Tool Call)"
+
+    # 3. In-context tool errors
+    for msg in messages:
+        if msg.get('role') in ('tool', 'function', 'system'):
+            content = str(msg.get('content', '')).lower()
+            if "tool not found" in content or "unknown tool" in content or "function not found" in content:
+                return True, f"TOOL_ERROR: {msg.get('content')}"
+
+    return False, None
+
+def condense_trajectory(messages, tool_args_limit=500, tool_output_limit=1000):
+    """
+    Create a condensed text representation of an agent trajectory.
+
+    Includes:
+      - User messages (in full)
+      - Assistant tool calls (name + truncated arguments)
+      - Tool/function outputs (name + truncated content)
+      - Assistant text messages
+
+    Skips system messages.
+    """
+    parts = []
+    for msg in messages:
+        role = msg.get('role', '')
+
+        if role == 'system':
+            continue
+
+        elif role == 'user':
+            parts.append(f"[User]: {msg.get('content', '')}")
+
+        elif role == 'assistant':
+            # Handle tool_calls (OpenAI format)
+            if 'tool_calls' in msg and msg['tool_calls']:
+                for tc in msg['tool_calls']:
+                    func = tc.get('function', {})
+                    name = func.get('name', 'unknown')
+                    args_raw = func.get('arguments', '')
+                    if isinstance(args_raw, dict):
+                        args_raw = json.dumps(args_raw)
+                    args_display = args_raw[:tool_args_limit]
+                    if len(args_raw) > tool_args_limit:
+                        args_display += " ... (truncated)"
+                    parts.append(f"[Assistant → Tool Call]: {name}({args_display})")
+            # Handle legacy function_call
+            elif 'function_call' in msg and msg['function_call']:
+                func = msg['function_call']
+                name = func.get('name', 'unknown')
+                args_raw = func.get('arguments', '')
+                if isinstance(args_raw, dict):
+                    args_raw = json.dumps(args_raw)
+                args_display = args_raw[:tool_args_limit]
+                if len(args_raw) > tool_args_limit:
+                    args_display += " ... (truncated)"
+                parts.append(f"[Assistant → Tool Call]: {name}({args_display})")
+
+            # Assistant text content
+            content = msg.get('content', '')
+            if content:
+                parts.append(f"[Assistant]: {content}")
+
+        elif role in ('tool', 'function'):
+            name = msg.get('name', 'unknown')
+            content = str(msg.get('content', ''))
+            content_display = content[:tool_output_limit]
+            if len(content) > tool_output_limit:
+                content_display += " ... (truncated)"
+            parts.append(f"[Tool Output — {name}]: {content_display}")
+
+    return "\n".join(parts)
+
+def extract_final_response(messages):
+    """
+    Return the text content of the last assistant message that contains text
+    (i.e., not a bare tool-call-only message).
+    Returns empty string if no such message exists.
+    """
+    for msg in reversed(messages):
+        if msg.get('role') == 'assistant':
+            content = msg.get('content', '')
+            if content and content.strip():
+                return content.strip()
+    return ""
+
+def extract_tool_evidence(messages):
+    """
+    Extract all tool-call / tool-output pairs from a trajectory.
+
+    Returns a list of dicts:
+      [{"tool_name": str, "arguments_summary": str, "output": str}, ...]
+
+    Pairs are built by matching tool_call_ids where available,
+    otherwise by sequential ordering.
+    """
+    # First pass: collect all tool calls with their IDs
+    pending_calls = {}  # tool_call_id -> {tool_name, arguments_summary}
+    ordered_calls = []  # fallback for legacy format without IDs
+
+    for msg in messages:
+        if msg.get('role') == 'assistant':
+            # OpenAI tool_calls format
+            if 'tool_calls' in msg and msg['tool_calls']:
+                for tc in msg['tool_calls']:
+                    func = tc.get('function', {})
+                    name = func.get('name', 'unknown')
+                    args_raw = func.get('arguments', '')
+                    if isinstance(args_raw, dict):
+                        args_raw = json.dumps(args_raw)
+                    tc_id = tc.get('id')
+                    entry = {"tool_name": name, "arguments_summary": args_raw, "output": ""}
+                    if tc_id:
+                        pending_calls[tc_id] = entry
+                    ordered_calls.append(entry)
+
+            # Legacy function_call format
+            elif 'function_call' in msg and msg['function_call']:
+                func = msg['function_call']
+                name = func.get('name', 'unknown')
+                args_raw = func.get('arguments', '')
+                if isinstance(args_raw, dict):
+                    args_raw = json.dumps(args_raw)
+                entry = {"tool_name": name, "arguments_summary": args_raw, "output": ""}
+                ordered_calls.append(entry)
+
+        # Match tool outputs back to their calls
+        elif msg.get('role') == 'tool':
+            tc_id = msg.get('tool_call_id')
+            content = str(msg.get('content', ''))
+            if tc_id and tc_id in pending_calls:
+                pending_calls[tc_id]['output'] = content
+            else:
+                # Fallback: attach to the first call that still has no output
+                for entry in ordered_calls:
+                    if not entry['output']:
+                        entry['output'] = content
+                        break
+
+        elif msg.get('role') == 'function':
+            content = str(msg.get('content', ''))
+            for entry in ordered_calls:
+                if not entry['output']:
+                    entry['output'] = content
+                    break
+
+    return ordered_calls
+
+def extract_assistant_content(messages):
+    """
+    Concatenate the text content of ALL assistant messages in a trajectory
+    (excluding pure tool-call-only messages that have no text).
+
+    Returns a single string with messages separated by newlines.
+    """
+    parts = []
+    for msg in messages:
+        if msg.get('role') == 'assistant':
+            content = msg.get('content', '')
+            if content and content.strip():
+                parts.append(content.strip())
+    return "\n\n".join(parts)

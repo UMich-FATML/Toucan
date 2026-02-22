@@ -294,15 +294,10 @@ def main():
     print(f"Input directory: {input_dir}")
     print(f"Input basename: {input_basename}")
     
-    # Create output file / folder
-    output_path = f"{input_dir}/processed"
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
-    
-    # Define output paths
+    # Define output paths (output alongside input file)
     base_name = input_basename.replace('_results.jsonl', '').replace('.jsonl', '')
-    filtered_output = f"{output_path}/{base_name}_rule_filtered.jsonl"
-    filtered_output_review = f"{output_path}/preview_{base_name}_rule_filtered.json"
+    filtered_output = f"{input_dir}/{base_name}_rule_filtered.jsonl"
+    filtered_output_review = f"{input_dir}/preview_{base_name}_rule_filtered.json"
 
     # Run filtering
     print("Applying rule-based filtering...")
