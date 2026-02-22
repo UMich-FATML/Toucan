@@ -4,17 +4,16 @@ import json
 import os
 import re
 from time import sleep, time
-from typing import Any, Dict, List
 
 import requests
 from tqdm import tqdm
 
 try:
-    from pydantic import BaseModel, ValidationError
+    from jsonschema import Draft202012Validator, ValidationError as JsonSchemaValidationError
 except ImportError:
     print(
-        "Error: pydantic is required for structured_completions_endpoint.py. "
-        "Install it with: pip install pydantic"
+        "Error: jsonschema is required for structured_completions_endpoint.py. "
+        "Install it with: pip install jsonschema"
     )
     raise SystemExit(1)
 
@@ -26,24 +25,42 @@ from utils import (
 )
 
 
-class TargetToolModel(BaseModel):
-    server: str
-    tool: str
-    arguments: Dict[str, Any]
-    output: Any
+def get_default_output_schema_path():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(script_dir, "prompts", "genq_from_onet_tasks_output_schema.json")
 
 
-class OnetResponseModel(BaseModel):
-    tool_analysis: str
-    cross_tool_workflow: str
-    target_tools: List[TargetToolModel]
-    request: str
+def derive_schema_name(schema_path):
+    base_name = os.path.splitext(os.path.basename(schema_path))[0]
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", base_name).strip("-")
+    return normalized or "structured-response"
 
 
-RESPONSE_JSON_SCHEMA = {
-    "name": "onet-task-response",
-    "schema": OnetResponseModel.model_json_schema(),
-}
+def load_response_schema_config(schema_path):
+    if not os.path.exists(schema_path):
+        raise FileNotFoundError(f"Output schema file not found: {schema_path}")
+
+    with open(schema_path, "r", encoding="utf-8") as f:
+        schema_data = json.load(f)
+
+    if not isinstance(schema_data, dict):
+        raise ValueError("Output schema must be a JSON object.")
+
+    if isinstance(schema_data.get("schema"), dict):
+        normalized_schema = schema_data["schema"]
+        normalized_name = schema_data.get("name", derive_schema_name(schema_path))
+    else:
+        normalized_schema = schema_data
+        normalized_name = derive_schema_name(schema_path)
+
+    Draft202012Validator.check_schema(normalized_schema)
+    return (
+        {
+            "name": normalized_name,
+            "schema": normalized_schema,
+        },
+        Draft202012Validator(normalized_schema),
+    )
 
 
 def get_args():
@@ -96,6 +113,12 @@ def get_args():
         default=3,
         help="HTTP retry count per request.",
     )
+    parser.add_argument(
+        "--output_schema_file",
+        type=str,
+        default=get_default_output_schema_path(),
+        help="Path to JSON schema file used for response_format and validation.",
+    )
     parser.add_argument("--step", type=str, default="1.2_onet", help="Pipeline step tag.")
     return parser.parse_args()
 
@@ -105,6 +128,16 @@ print(f"Structured O*NET Response Generation. Arguments: {args}")
 
 if not args.input_file.endswith("prepared.jsonl") and not args.input_file.endswith("prepared.json"):
     raise ValueError("Input file must end with prepared.json(l) for completion pipeline.")
+
+try:
+    RESPONSE_JSON_SCHEMA, OUTPUT_SCHEMA_VALIDATOR = load_response_schema_config(
+        args.output_schema_file
+    )
+except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+    raise SystemExit(f"Failed to load output schema: {e}")
+
+RESPONSE_SCHEMA_TEXT = json.dumps(RESPONSE_JSON_SCHEMA["schema"], ensure_ascii=False)
+print(f"Loaded output schema from: {args.output_schema_file}")
 
 model_abbreviation = get_model_abbreviation(args.model_path)
 base_name = args.input_file[: args.input_file.rfind(".")]
@@ -165,24 +198,27 @@ def parse_assistant_json(raw_text):
     if brace_match:
         candidates.append(brace_match.group(0).strip())
 
+    last_schema_error = "invalid JSON content"
     for candidate in candidates:
         try:
             parsed = json.loads(candidate)
-            validated = OnetResponseModel.model_validate(parsed)
-            return validated, ""
-        except (json.JSONDecodeError, ValidationError):
+        except json.JSONDecodeError:
             continue
+        try:
+            OUTPUT_SCHEMA_VALIDATOR.validate(parsed)
+            return parsed, ""
+        except JsonSchemaValidationError as e:
+            last_schema_error = e.message
 
-    return None, "invalid JSON content or schema mismatch"
+    return None, f"schema mismatch: {last_schema_error}"
 
 
 def build_repair_prompt(raw_output, parse_error):
     return (
         "Your previous response is invalid.\n"
         f"Issue: {parse_error}\n"
-        "Rewrite the response to valid JSON only, matching this exact shape:\n"
-        "{tool_analysis: string, cross_tool_workflow: string, target_tools: array, request: string}.\n"
-        "Each target_tools item must contain: server (string), tool (string), arguments (object), output.\n"
+        "Rewrite the response to valid JSON only and satisfy this JSON Schema:\n"
+        f"{RESPONSE_SCHEMA_TEXT}\n"
         "Do not include markdown or explanations.\n"
         f"Previous response:\n{raw_output}"
     )
@@ -202,7 +238,7 @@ def process_item(item):
         parsed_model, parse_error = parse_assistant_json(response_text)
 
         if parsed_model is not None:
-            normalized_json = json.dumps(parsed_model.model_dump(), ensure_ascii=False)
+            normalized_json = json.dumps(parsed_model, ensure_ascii=False)
             item["messages"] = original_messages + [
                 {"role": "assistant", "content": normalized_json}
             ]
@@ -230,6 +266,7 @@ def add_generation_config_to_metadata(dataset):
             "top_p": args.top_p,
             "repetition_penalty": args.repetition_penalty,
             "step": args.step,
+            "output_schema_file": args.output_schema_file,
         },
         "timestamp": int(time()),
     }
