@@ -24,7 +24,6 @@ except ImportError:
     )
     raise SystemExit(1)
 
-SUPPORTED_MODE = "onet_tasks"
 BAD_PATTERNS = (
     "i cannot",
     "i can't",
@@ -44,9 +43,9 @@ OUTPUT_SCHEMA_VALIDATOR = None
 class ParsedAssistantPayload:
     tool_analysis: str
     cross_tool_workflow: str
-    target_tools: str
+    target_tools_str: str
     question: str
-    target_tools_with_outputs: Optional[list[Any]] = None
+    target_tools: list[Any]
 
 
 @dataclass
@@ -312,18 +311,21 @@ def extract_individual_components(parsed_json, metadata=None):
     cross_tool_workflow = parsed_json.get("cross_tool_workflow", "")
     request_text = parsed_json.get("request", "")
 
-    target_tools_array = parsed_json.get("target_tools", [])
-    target_tools = extract_json_tools(target_tools_array, metadata)
+    target_tools_array = parsed_json.get("target_tools", None)
+    if not isinstance(target_tools_array, list):
+        return None
 
-    if not all([tool_analysis, target_tools, request_text]):
+    target_tools_str = extract_json_tools(target_tools_array, metadata)
+
+    if not all([tool_analysis, target_tools_str, request_text]):
         return None
 
     payload = ParsedAssistantPayload(
         tool_analysis=tool_analysis.strip(),
         cross_tool_workflow=cross_tool_workflow.strip() if cross_tool_workflow else "",
-        target_tools=target_tools.strip(),
+        target_tools_str=target_tools_str.strip(),
         question=clean_html_comments(request_text.strip()),
-        target_tools_with_outputs=target_tools_array if isinstance(target_tools_array, list) else None,
+        target_tools=target_tools_array,
     )
     return payload
 
@@ -401,7 +403,7 @@ def extract_questions(input_file, output_file, preview_file=None):
                     print(f"Failed to parse JSON response for row {total_processed}. Skipping.")
                     continue
 
-                if not parsed_response.target_tools.strip():
+                if not parsed_response.target_tools_str.strip():
                     print(f"No target tools extracted for row {total_processed}. Skipping.")
                     continue
 
@@ -410,12 +412,13 @@ def extract_questions(input_file, output_file, preview_file=None):
                     continue
 
                 filtered_metadata = filter_metadata_by_target_tools(
-                    metadata, parsed_response.target_tools
+                    metadata, parsed_response.target_tools_str
                 )
                 filtered_metadata = prune_metadata_for_output(filtered_metadata)
 
                 result = {
                     "target_tools": parsed_response.target_tools,
+                    "target_tools_str": parsed_response.target_tools_str,
                     "question": parsed_response.question,
                     "tool_analysis": parsed_response.tool_analysis,
                     "cross_tool_workflow": parsed_response.cross_tool_workflow,
@@ -424,8 +427,6 @@ def extract_questions(input_file, output_file, preview_file=None):
                         "server_count": get_server_count(filtered_metadata),
                     },
                 }
-                if parsed_response.target_tools_with_outputs is not None:
-                    result["target_tools_with_outputs"] = parsed_response.target_tools_with_outputs
 
                 result = clean_json_object(result)
                 f_out.write(json.dumps(result, ensure_ascii=False) + "\n")
@@ -461,12 +462,22 @@ def build_sanitized_entry(item, metric):
     """
     Build a sanitized/distance entry with consistent schema.
     """
-    target_tools = item["target_tools"]
-    filtered_metadata = filter_metadata_by_target_tools(item.get("metadata", {}), target_tools)
+    target_tools = item.get("target_tools")
+    if not isinstance(target_tools, list):
+        raise ValueError("target_tools is required and must be a list.")
+
+    target_tools_str = item.get("target_tools_str")
+    if not isinstance(target_tools_str, str) or not target_tools_str.strip():
+        target_tools_str = extract_json_tools(target_tools)
+    if not target_tools_str:
+        raise ValueError("target_tools_str is required and must be derivable from target_tools.")
+
+    filtered_metadata = filter_metadata_by_target_tools(item.get("metadata", {}), target_tools_str)
     filtered_metadata = prune_metadata_for_output(filtered_metadata)
 
     entry = {
         "target_tools": target_tools,
+        "target_tools_str": target_tools_str,
         "question": item["question"],
         "metadata": filtered_metadata,
         "min_distance": metric.min_distance,
@@ -480,9 +491,6 @@ def build_sanitized_entry(item, metric):
     workflow = item.get("cross_tool_workflow")
     if workflow:
         entry["cross_tool_workflow"] = workflow
-
-    if "target_tools_with_outputs" in item and item["target_tools_with_outputs"] is not None:
-        entry["target_tools_with_outputs"] = item["target_tools_with_outputs"]
 
     return clean_json_object(entry)
 
@@ -647,7 +655,17 @@ def prepare_questions(input_file, output_file):
             data = json.loads(line)
             metadata = data.get("metadata", {})
 
-            filtered_metadata = filter_metadata_by_target_tools(metadata, data["target_tools"])
+            target_tools = data.get("target_tools")
+            if not isinstance(target_tools, list):
+                raise ValueError("target_tools is required and must be a list.")
+
+            target_tools_str = data.get("target_tools_str")
+            if not isinstance(target_tools_str, str) or not target_tools_str.strip():
+                target_tools_str = extract_json_tools(target_tools)
+            if not target_tools_str:
+                raise ValueError("target_tools_str is required and must be derivable from target_tools.")
+
+            filtered_metadata = filter_metadata_by_target_tools(metadata, target_tools_str)
             filtered_metadata = prune_metadata_for_output(filtered_metadata)
 
             stats["total_questions"] += 1
@@ -659,10 +677,10 @@ def prepare_questions(input_file, output_file):
             )
 
             question_content = data["question"]
-            if args.enable_tool_hint and data["target_tools"]:
+            if args.enable_tool_hint and target_tools_str:
                 question_content = (
                     f"{data['question']}\n\n"
-                    f"You need to solve this question using {data['target_tools']} tool "
+                    f"You need to solve this question using {target_tools_str} tool "
                     "from the list of available tools."
                 )
 
@@ -670,7 +688,8 @@ def prepare_questions(input_file, output_file):
                 "messages": [{"role": "user", "content": question_content}],
                 "metadata": {
                     **filtered_metadata,
-                    "target_tools": data["target_tools"],
+                    "target_tools": target_tools,
+                    "target_tools_str": target_tools_str,
                     "question": data["question"],
                     "min_distance": data.get("min_distance", None),
                     "duplicate_count": data.get("duplicate_count", 0),
@@ -682,8 +701,6 @@ def prepare_questions(input_file, output_file):
                 result["metadata"]["tool_analysis"] = data["tool_analysis"]
             if data.get("cross_tool_workflow"):
                 result["metadata"]["cross_tool_workflow"] = data["cross_tool_workflow"]
-            if data.get("target_tools_with_outputs"):
-                result["metadata"]["target_tools_with_outputs"] = data["target_tools_with_outputs"]
 
             result = clean_json_object(result)
             outf.write(json.dumps(result, ensure_ascii=False) + "\n")
