@@ -10,7 +10,6 @@ from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 import faiss
 import shutil
-from jsonschema import Draft7Validator
 from utils import clean_json_object, clean_html_comments, create_preview_json
 
 ################
@@ -124,7 +123,7 @@ def filter_metadata_by_target_tools(metadata, target_tools_str):
 
 def parse_json_response(response_content, metadata=None):
     """
-    Parse the JSON response from the assistant to extract tool_analysis, cross_tool_workflow, target_tools, and question.
+    Parse the JSON response from the assistant to extract tool_analysis, cross_tool_workflow, target_tools, and request.
 
     Expected JSON format:
     {
@@ -132,7 +131,7 @@ def parse_json_response(response_content, metadata=None):
       "cross_tool_workflow": "...",
       "target_tasks": [...],
       "target_tools": [...],
-      "question": "..."
+      "request": "..."
     }
     """
     try:
@@ -168,82 +167,32 @@ def parse_json_response(response_content, metadata=None):
 def extract_individual_components(parsed_json, metadata=None):
     """
     Extract individual components from JSON for onet mode.
-    Extracts: tool_analysis, cross_tool_workflow, target_tools, target_tools_with_outputs, and question.
+    Extracts: tool_analysis, cross_tool_workflow, target_tools, target_tools_with_outputs, and request.
     """
     # Extract fields from JSON
     tool_analysis = parsed_json.get('tool_analysis', '')
     cross_tool_workflow = parsed_json.get('cross_tool_workflow', '')
-    question = parsed_json.get('question', '')
+    request_text = parsed_json.get('request', parsed_json.get('question', ''))
 
     # Extract and convert target_tools from JSON array format to comma-separated string
     target_tools_array = parsed_json.get('target_tools', [])
     target_tools = extract_json_tools(target_tools_array, metadata)
 
     # Validate that we have all required components
-    if not all([tool_analysis, target_tools, question]):
+    if not all([tool_analysis, target_tools, request_text]):
         return None
 
     result = {
         'tool_analysis': tool_analysis.strip(),
         'cross_tool_workflow': cross_tool_workflow.strip() if cross_tool_workflow else "",
         "target_tools": target_tools.strip(),
-        "question": clean_html_comments(question.strip())
+        # Keep legacy output key "question" for downstream compatibility.
+        "question": clean_html_comments(request_text.strip())
     }
 
     # Preserve full target_tools array with outputs if present
     if target_tools_array and isinstance(target_tools_array, list):
         result['target_tools_with_outputs'] = target_tools_array
-
-    return result
-
-
-def get_tool_input_schema(metadata, server_name, tool_name):
-    """Retrieve the input_schema for a tool from metadata."""
-    if not metadata or 'mcp_servers' not in metadata:
-        return None
-
-    for server_info in metadata.get('mcp_servers', []):
-        if server_info.get('server_name') == server_name:
-            # Check both formats: remote_server_response.tools (tool-first) and tools (onet)
-            tools = server_info.get('remote_server_response', {}).get('tools', [])
-            if not tools:
-                tools = server_info.get('tools', [])
-            for tool in tools:
-                if tool.get('name') == tool_name:
-                    return tool.get('inputSchema') or tool.get('input_schema')
-    return None
-
-
-def validate_tool_arguments(arguments, input_schema, tool_name="", server_name=""):
-    """
-    Validate tool arguments against JSON Schema input_schema.
-    Returns: {"is_valid": bool, "errors": [...], "warnings": [...]}
-    """
-    result = {"is_valid": True, "errors": [], "warnings": []}
-
-    if arguments is None:
-        arguments = {}
-
-    if not input_schema or not isinstance(input_schema, dict):
-        # No schema to validate against - pass through
-        return result
-
-    try:
-        validator = Draft7Validator(input_schema)
-        for error in validator.iter_errors(arguments):
-            error_info = {
-                "property": ".".join(str(p) for p in error.absolute_path) or "(root)",
-                "message": error.message
-            }
-            # Treat additionalProperties as warning only
-            if error.validator == "additionalProperties":
-                result["warnings"].append(error_info)
-            else:
-                result["errors"].append(error_info)
-
-        result["is_valid"] = len(result["errors"]) == 0
-    except Exception as e:
-        result["warnings"].append({"property": None, "message": str(e)})
 
     return result
 
@@ -254,52 +203,9 @@ def extract_json_tools(target_tools_array, metadata=None):
     Expected format: [{"server": "Server1", "tool": "search", "arguments": {...}}, ...]
 
     Returns: A string with comma-separated tools in format "server_name::tool_name"
-             Returns empty string if any tool/server validation fails
     """
     if not isinstance(target_tools_array, list) or len(target_tools_array) == 0:
         return ""
-
-    # Helper function to validate server and tool existence
-    def validate_server_tool(server_name, tool_name, metadata):
-        """
-        Validate if server_name and tool_name exist in metadata.
-        Returns (validated_server_name, validated_tool_name, is_valid) tuple.
-        """
-        if not metadata or 'mcp_servers' not in metadata:
-            return server_name, tool_name, False
-
-        servers = metadata['mcp_servers']
-        if not isinstance(servers, list):
-            return server_name, tool_name, True
-
-        def get_server_tools(server_info):
-            """Get tools from either format: remote_server_response.tools (tool-first) or tools (onet)."""
-            tools = server_info.get("remote_server_response", {}).get("tools", [])
-            if not tools:
-                tools = server_info.get("tools", [])
-            return tools
-
-        # First try exact match
-        for server_info in servers:
-            server_info_name = server_info.get("server_name", "")
-            if server_info_name == server_name:
-                for tool in get_server_tools(server_info):
-                    if tool.get("name", "") == tool_name:
-                        return server_name, tool_name, True
-
-        # Try adding suffixes to server_name
-        suffixes = [" Server", " MCP Server", " MCP"]
-        for suffix in suffixes:
-            server_name_with_suffix = server_name + suffix
-            for server_info in servers:
-                server_info_name = server_info.get("server_name", "")
-                if server_info_name == server_name_with_suffix:
-                    for tool in get_server_tools(server_info):
-                        if tool.get("name", "") == tool_name:
-                            return server_name_with_suffix, tool_name, True
-
-        # No match found
-        return server_name, tool_name, False
 
     tools_list = []
 
@@ -313,33 +219,11 @@ def extract_json_tools(target_tools_array, metadata=None):
         if not tool_name:
             continue
 
-        # Validate server and tool existence
-        validated_server, validated_tool, is_valid = validate_server_tool(server_name, tool_name, metadata)
-
-        if not is_valid:
-            print(f"Warning: Tool '{tool_name}' not found in server '{server_name}' or server not found in metadata. Skipping entire input.")
-            return ""  # Return empty string to skip entire input
-
-        # Validate arguments against schema
-        arguments = tool_obj.get('arguments', {})
-        input_schema = get_tool_input_schema(metadata, validated_server, validated_tool)
-        validation_result = validate_tool_arguments(arguments, input_schema, validated_tool, validated_server)
-
-        for error in validation_result["errors"]:
-            print(f"Warning: Argument validation error for {validated_server}::{validated_tool} - {error['message']}")
-
-        for warning in validation_result["warnings"]:
-            print(f"Info: {validated_server}::{validated_tool} - {warning['message']}")
-
-        if not validation_result["is_valid"]:
-            print(f"Warning: Argument validation failed for {validated_server}::{validated_tool}. Skipping entire input.")
-            return ""
-
         # Use server_name::tool_name format
-        if validated_server and validated_server.strip():
-            tool_entry = f"{validated_server}::{validated_tool}"
+        if server_name and server_name.strip():
+            tool_entry = f"{server_name}::{tool_name}"
         else:
-            tool_entry = validated_tool
+            tool_entry = tool_name
 
         tools_list.append(tool_entry)
 
@@ -366,9 +250,7 @@ def extract_questions(input_file, output_file, preview_file=None):
                 if not mode:
                     mode = metadata.get("mode", "unknown")
 
-                if mode == "onet_occupation":
-                    mode_counts["onet"] += 1
-                elif mode == "onet":
+                if mode in ["onet_occupation", "onet", "onet_tasks"]:
                     mode_counts["onet"] += 1
                 else:
                     mode_counts["unknown"] += 1
@@ -396,9 +278,9 @@ def extract_questions(input_file, output_file, preview_file=None):
                     print(f"Failed to parse JSON response for row {total_processed}. Skipping.")
                     continue
 
-                # Check if target_tools is empty (indicating validation failure)
+                # Check if target_tools is empty after parsing
                 if not parsed_response["target_tools"] or parsed_response["target_tools"].strip() == "":
-                    print(f"Server-tools pairs validation failed or empty for row {total_processed}. Skipping.")
+                    print(f"No target tools extracted for row {total_processed}. Skipping.")
                     continue
 
                 # Check for common failure patterns
