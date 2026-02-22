@@ -60,10 +60,10 @@ fi
 vllm_extra_args=()
 
 if [[ "$model_path" == *"Kimi-K2-Thinking"* ]]; then
-    vllm_extra_args+=(--tensor-parallel-size 8 --decode-context-parallel-size 8 --enable-auto-tool-choice --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --trust-remote-code)
+    vllm_extra_args+=(--tensor-parallel-size 8 --decode-context-parallel-size 8 --enable-auto-tool-choice --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --trust-remote-code --served_model_name Kimi-K2-Thinking)
     echo -e "${BLUE}[start_vllm] Applying Kimi-K2-Thinking configuration${NC}" >&2
 elif [[ "$model_path" == *"Kimi-K2.5"* ]]; then
-    vllm_extra_args+=(--tensor-parallel-size 8 --mm-encoder-tp-mode data --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --trust-remote-code)
+    vllm_extra_args+=(--tensor-parallel-size 8 --mm-encoder-tp-mode data --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --trust-remote-code --served_model_name Kimi-K2.5)
     echo -e "${BLUE}[start_vllm] Applying Kimi-K2.5 configuration${NC}" >&2
 fi
 
