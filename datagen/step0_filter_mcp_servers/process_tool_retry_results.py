@@ -71,6 +71,11 @@ def extract_tool_retry_result(item):
     tool_names = metadata.get("tool_names", [])
     tool_name = tool_names[0] if tool_names else "unknown"
 
+    # Extract model and timestamp from synthetic_data_gen_configs written by the agent runner
+    configs = metadata.get("synthetic_data_gen_configs", [])
+    retry_model = configs[-1].get("model", "unknown") if configs else "unknown"
+    retry_timestamp = configs[-1].get("timestamp") if configs else None
+
     messages = item.get("messages", [])
     agent_error, agent_error_type, agent_error_msg = detect_agent_error(messages)
 
@@ -79,6 +84,8 @@ def extract_tool_retry_result(item):
             "tool_name": tool_name,
             "quality": "fail",
             "reasoning": f"Agent error ({agent_error_type}): {agent_error_msg or 'unknown'}",
+            "model": retry_model,
+            "timestamp": retry_timestamp,
         }
     else:
         final_text = extract_final_response(messages)
@@ -88,6 +95,8 @@ def extract_tool_retry_result(item):
             "quality": "fail",
             "reasoning": "No quality report parsed from agent output.",
         }
+        tool_result["model"] = retry_model
+        tool_result["timestamp"] = retry_timestamp
 
     return server_id, tool_name, tool_result
 
@@ -154,6 +163,11 @@ def main():
 
         num_passed = sum(1 for r in new_tool_results if r["quality"] == "pass")
 
+        # Collect distinct retry models used for this server's retried tools
+        retry_models = list({
+            r["model"] for r in retry_tools.values() if r.get("model") and r["model"] != "unknown"
+        })
+
         updated = dict(original)
         updated["agent_error"] = False
         updated["agent_error_type"] = None
@@ -163,6 +177,8 @@ def main():
         updated["metadata"]["num_tools_checked"] = len(new_tool_results)
         updated["metadata"]["num_tools_passed"] = num_passed
         updated["metadata"]["retry_timestamp"] = int(time())
+        if retry_models:
+            updated["metadata"]["retry_model"] = retry_models[0] if len(retry_models) == 1 else retry_models
 
         output_items.append(updated)
         servers_updated += 1

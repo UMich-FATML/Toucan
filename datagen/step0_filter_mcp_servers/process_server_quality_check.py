@@ -232,6 +232,10 @@ def build_output_item(item, server_data, model_name):
     final_text = extract_final_response(messages)
     tool_results = parse_quality_report(final_text, tool_names)
 
+    # Tag each tool result with the model that graded it
+    for r in tool_results:
+        r["model"] = model_name
+
     num_passed = sum(1 for r in tool_results if r["quality"] == "pass")
 
     return {
