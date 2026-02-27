@@ -6,10 +6,10 @@ import random
 import re
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import numpy as np
 import pandas as pd
@@ -105,11 +105,12 @@ def parse_args() -> argparse.Namespace:
   return args
 
 
-def resolve_paths(script_dir: str) -> dict[str, str]:
+def resolve_paths(script_dir: str, no_refs: bool) -> dict[str, str]:
+  prompt_template_filename = "genq_from_onet_tasks_no_refs.md" if no_refs else "genq_from_onet_tasks.md"
   return {
     "tasks_to_servers_path": os.path.join(script_dir, "tasks_to_smithery_servers.jsonl"),
     "occupation_data_path": os.path.join(script_dir, "onet_db_30_1_text", "Occupation Data.txt"),
-    "prompt_template_path": os.path.join(script_dir, "prompts", "genq_from_onet_tasks.md"),
+    "prompt_template_path": os.path.join(script_dir, "prompts", prompt_template_filename),
     "task_refs_path": os.path.join(script_dir, "task_refs.parquet"),
   }
 
@@ -308,14 +309,11 @@ def get_valid_onet_codes(occupation_to_tasks: dict[str, list[dict[str, Any]]], n
   return valid_onet_codes
 
 
-def create_combos(
+def iter_combo_records(
   occupation_to_tasks: dict[str, list[dict[str, Any]]],
   valid_onet_codes: list[str],
   num_tasks: int,
-  limit: int | None = None,
-) -> pd.DataFrame:
-  combos = []
-
+) -> Iterator[dict[str, Any]]:
   for onet_code in sorted(valid_onet_codes):
     tasks = occupation_to_tasks[onet_code]
     tasks_sorted = sorted(tasks, key=lambda t: t.get("task_id", ""))
@@ -342,26 +340,30 @@ def create_combos(
         continue
 
       for server_assignment in itertools.product(*per_task_server_ids):
-        combos.append(
-          {
-            "onet_code": onet_code,
-            "task_indices": task_indices,
-            "tasks": selected_tasks,
-            "selected_server_ids": server_assignment,
-          }
-        )
-        if limit is not None and len(combos) >= limit:
-          break
+        yield {
+          "onet_code": onet_code,
+          "task_indices": task_indices,
+          "tasks": selected_tasks,
+          "selected_server_ids": server_assignment,
+        }
 
-      if limit is not None and len(combos) >= limit:
-        break
 
-    if limit is not None and len(combos) >= limit:
-      break
+def count_combo_records(
+  occupation_to_tasks: dict[str, list[dict[str, Any]]],
+  valid_onet_codes: list[str],
+  num_tasks: int,
+  limit: int | None = None,
+) -> int:
+  count = 0
+  combo_iter = iter_combo_records(occupation_to_tasks, valid_onet_codes, num_tasks)
+  if limit is not None:
+    combo_iter = itertools.islice(combo_iter, limit)
 
-  df = pd.DataFrame(combos)
-  print(f"Built {len(df)} (occupation, task_combo, server_assignment) combinations")
-  return df
+  for _ in combo_iter:
+    count += 1
+
+  print(f"Built {count} (occupation, task_combo, server_assignment) combinations")
+  return count
 
 
 def compute_total_prompts(requested_total: int | None, combo_count: int) -> int:
@@ -393,27 +395,101 @@ def save_generation_args(args: argparse.Namespace, args_file_path: str) -> dict[
   return args_dict
 
 
-def serialize_combos(task_combos: pd.DataFrame, combos_parquet_path: str) -> None:
-  combos = []
-  for idx, row in task_combos.iterrows():
-    combos.append(
+def build_combo_parquet_row(combo_idx: int, combo_record: dict[str, Any]) -> dict[str, Any]:
+  return {
+    "combo_idx": combo_idx,
+    "onet_code": combo_record["onet_code"],
+    "task_indices": list(combo_record["task_indices"]),
+    "selected_server_ids": list(combo_record["selected_server_ids"]),
+    "tasks_metadata": [
       {
-        "combo_idx": idx,
-        "onet_code": row["onet_code"],
-        "task_indices": list(row["task_indices"]),
-        "selected_server_ids": list(row["selected_server_ids"]),
-        "tasks_metadata": [
-          {
-            "task_id": task.get("task_id"),
-            "task": task.get("task"),
-            "matched_servers": [server.get("server_id") for server in task.get("matched_servers", [])],
-          }
-          for task in row["tasks"]
-        ],
+        "task_id": task.get("task_id"),
+        "task": task.get("task"),
+        "matched_servers": [server.get("server_id") for server in task.get("matched_servers", [])],
       }
+      for task in combo_record["tasks"]
+    ],
+  }
+
+
+def write_empty_combos_parquet(combos_parquet_path: str) -> None:
+  try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+  except ImportError as exc:
+    raise RuntimeError("pyarrow is required to write combos.parquet") from exc
+
+  task_metadata_type = pa.list_(
+    pa.struct(
+      [
+        pa.field("task_id", pa.string()),
+        pa.field("task", pa.string()),
+        pa.field("matched_servers", pa.list_(pa.string())),
+      ]
+    )
+  )
+
+  empty_table = pa.Table.from_arrays(
+    [
+      pa.array([], type=pa.int64()),
+      pa.array([], type=pa.string()),
+      pa.array([], type=pa.list_(pa.int64())),
+      pa.array([], type=pa.list_(pa.string())),
+      pa.array([], type=task_metadata_type),
+    ],
+    names=["combo_idx", "onet_code", "task_indices", "selected_server_ids", "tasks_metadata"],
+  )
+  pq.write_table(empty_table, combos_parquet_path)
+
+
+def serialize_combos_streaming(
+  occupation_to_tasks: dict[str, list[dict[str, Any]]],
+  valid_onet_codes: list[str],
+  num_tasks: int,
+  total_prompts: int,
+  combos_parquet_path: str,
+  chunk_size: int = 10000,
+) -> None:
+  try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+  except ImportError as exc:
+    raise RuntimeError("pyarrow is required to write combos.parquet") from exc
+
+  writer = None
+  rows_buffer: list[dict[str, Any]] = []
+  written = 0
+
+  def flush_buffer() -> None:
+    nonlocal writer
+    if not rows_buffer:
+      return
+    table = pa.Table.from_pylist(rows_buffer)
+    if writer is None:
+      writer = pq.ParquetWriter(combos_parquet_path, table.schema)
+    writer.write_table(table)
+    rows_buffer.clear()
+
+  try:
+    combo_iter = itertools.islice(
+      iter_combo_records(occupation_to_tasks, valid_onet_codes, num_tasks),
+      total_prompts,
     )
 
-  pd.DataFrame(combos).to_parquet(combos_parquet_path, index=False)
+    for combo_idx, combo_record in enumerate(combo_iter):
+      rows_buffer.append(build_combo_parquet_row(combo_idx, combo_record))
+      written = combo_idx + 1
+      if len(rows_buffer) >= chunk_size:
+        flush_buffer()
+
+    flush_buffer()
+  finally:
+    if writer is not None:
+      writer.close()
+
+  if written == 0:
+    write_empty_combos_parquet(combos_parquet_path)
+
   print(f"Combinations dataframe saved to: {combos_parquet_path}")
 
 
@@ -582,7 +658,9 @@ def render_prompt(prompt_template: str, context: dict[str, Any]) -> str:
   for key, value in context.items():
     prompt = prompt.replace(f"{{{key}}}", str(value))
 
-  unresolved = re.findall(r"\{[A-Z0-9_]+\}", prompt)
+  # Only treat placeholder-like tokens (starting with letter/underscore) as unresolved.
+  # This avoids false positives for literal regex quantifiers in tool schemas like "{2}".
+  unresolved = re.findall(r"\{[A-Z_][A-Z0-9_]*\}", prompt)
   if unresolved:
     placeholders = ", ".join(sorted(set(unresolved)))
     raise ValueError(f"Prompt template placeholders were not fully resolved: {placeholders}")
@@ -592,7 +670,7 @@ def render_prompt(prompt_template: str, context: dict[str, Any]) -> str:
 
 def build_prompt_record(
   i: int,
-  row: pd.Series,
+  combo_record: dict[str, Any],
   occupation_dict: dict[str, dict[str, str]],
   server_index: dict[str, dict[str, Any]],
   prompt_template: str,
@@ -601,9 +679,9 @@ def build_prompt_record(
   task_refs_index: dict[tuple[str, str], dict[str, Any]] | None,
   ref_lookup_stats: TaskRefLookupStats,
 ) -> dict[str, Any]:
-  onet_code = row["onet_code"]
-  task_combo = row["tasks"]
-  selected_server_ids = list(row["selected_server_ids"])
+  onet_code = combo_record["onet_code"]
+  task_combo = combo_record["tasks"]
+  selected_server_ids = list(combo_record["selected_server_ids"])
 
   occupation_info = occupation_dict.get(onet_code, {"title": "Unknown Occupation", "description": ""})
   occupation_title = occupation_info["title"]
@@ -645,38 +723,81 @@ def build_prompt_record(
   }
 
 
-def generate_all_prompts(
+def generate_and_write_prompts_streaming(
   total_prompts: int,
   worker_count: int,
-  build_row_fn: Callable[[int], dict[str, Any]],
-) -> list[dict[str, Any]]:
-  results: list[dict[str, Any] | None] = [None] * total_prompts
+  combo_iterator: Iterator[dict[str, Any]],
+  build_row_fn: Callable[[int, dict[str, Any]], dict[str, Any]],
+  output_file_path: str,
+) -> int:
+  max_in_flight = max(worker_count * 4, 1)
+  next_submit_idx = 0
+  next_write_idx = 0
+  written_count = 0
+  pending_results: dict[int, dict[str, Any]] = {}
   pbar = tqdm(total=total_prompts, desc="Generating prompts")
+  combo_iter_exhausted = False
 
-  with ThreadPoolExecutor(max_workers=worker_count) as executor:
-    future_to_idx = {executor.submit(build_row_fn, i): i for i in range(total_prompts)}
-    for future in as_completed(future_to_idx):
-      idx = future_to_idx[future]
-      try:
-        result = future.result()
-      except Exception as exc:
+  with open(output_file_path, "w", encoding="utf-8") as f:
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+      future_to_idx: dict[Any, int] = {}
+
+      def submit_next() -> None:
+        nonlocal next_submit_idx, combo_iter_exhausted
+        if next_submit_idx >= total_prompts or combo_iter_exhausted:
+          return
+        try:
+          combo_record = next(combo_iterator)
+        except StopIteration:
+          combo_iter_exhausted = True
+          return
+        future = executor.submit(build_row_fn, next_submit_idx, combo_record)
+        future_to_idx[future] = next_submit_idx
+        next_submit_idx += 1
+
+      for _ in range(min(max_in_flight, total_prompts)):
+        submit_next()
+
+      while future_to_idx:
+        done, _ = wait(future_to_idx.keys(), return_when=FIRST_COMPLETED)
+
+        for future in done:
+          idx = future_to_idx.pop(future)
+          try:
+            result = future.result()
+          except Exception as exc:
+            pbar.close()
+            raise RuntimeError(f"Failed generating prompt for row {idx}") from exc
+
+          pending_results[idx] = result
+          pbar.update(1)
+
+          while next_write_idx in pending_results:
+            next_result = pending_results.pop(next_write_idx)
+            f.write(json.dumps(next_result) + "\n")
+            next_write_idx += 1
+            written_count += 1
+
+          submit_next()
+
+      if pending_results:
         pbar.close()
-        raise RuntimeError(f"Failed generating prompt for row {idx}") from exc
-      results[idx] = result
-      pbar.update(1)
+        raise RuntimeError("Prompt generation completed with unwritten pending results.")
+
+      if next_submit_idx != total_prompts:
+        pbar.close()
+        raise RuntimeError(
+          f"Prompt generation ended early: submitted {next_submit_idx} of {total_prompts} prompts"
+        )
+
+      if written_count != total_prompts:
+        pbar.close()
+        raise RuntimeError(
+          f"Prompt generation completed with incomplete writes: wrote {written_count} of {total_prompts}"
+        )
 
   pbar.close()
-
-  if any(result is None for result in results):
-    raise RuntimeError("Prompt generation completed with missing results entries.")
-
-  return [result for result in results if result is not None]
-
-
-def write_jsonl(results: list[dict[str, Any]], output_file_path: str) -> None:
-  with open(output_file_path, "w", encoding="utf-8") as f:
-    for result in results:
-      f.write(json.dumps(result) + "\n")
+  return written_count
 
 
 def load_inputs(paths: dict[str, str], args: argparse.Namespace) -> InputBundle:
@@ -717,7 +838,7 @@ def main() -> None:
     np.random.seed(args.seed)
 
   script_dir = os.path.dirname(os.path.abspath(__file__))
-  paths = resolve_paths(script_dir)
+  paths = resolve_paths(script_dir, args.no_refs)
   inputs = load_inputs(paths, args)
   pool = build_generation_pool(inputs.tasks_list, inputs.server_index, args.num_tasks)
 
@@ -727,19 +848,24 @@ def main() -> None:
       "Try reducing --num_tasks."
     )
 
-  task_combos = create_combos(
+  combo_count = count_combo_records(
     occupation_to_tasks=pool.occupation_to_tasks,
     valid_onet_codes=pool.valid_onet_codes,
     num_tasks=args.num_tasks,
     limit=args.total_prompts,
   )
-
-  total_prompts = compute_total_prompts(args.total_prompts, len(task_combos))
+  total_prompts = compute_total_prompts(args.total_prompts, combo_count)
   total_prompts_tag = str(args.total_prompts) if args.total_prompts is not None else "all"
   output_paths = prepare_output_paths(args, total_prompts_tag)
   args_dict = save_generation_args(args, output_paths.args_file_path)
 
-  serialize_combos(task_combos, output_paths.combos_parquet_path)
+  serialize_combos_streaming(
+    occupation_to_tasks=pool.occupation_to_tasks,
+    valid_onet_codes=pool.valid_onet_codes,
+    num_tasks=args.num_tasks,
+    total_prompts=total_prompts,
+    combos_parquet_path=output_paths.combos_parquet_path,
+  )
   task_refs_index = None
   ref_lookup_stats = TaskRefLookupStats()
 
@@ -749,11 +875,10 @@ def main() -> None:
 
   worker_count = init_generation_settings(args)
 
-  def build_row_fn(i: int) -> dict[str, Any]:
-    row = task_combos.iloc[i]
+  def build_row_fn(i: int, combo_record: dict[str, Any]) -> dict[str, Any]:
     return build_prompt_record(
       i=i,
-      row=row,
+      combo_record=combo_record,
       occupation_dict=inputs.occupation_dict,
       server_index=inputs.server_index,
       prompt_template=inputs.prompt_template,
@@ -763,11 +888,19 @@ def main() -> None:
       ref_lookup_stats=ref_lookup_stats,
     )
 
-  results = generate_all_prompts(total_prompts, worker_count, build_row_fn)
-  write_jsonl(results, output_paths.output_file_path)
+  written_count = generate_and_write_prompts_streaming(
+    total_prompts=total_prompts,
+    worker_count=worker_count,
+    combo_iterator=itertools.islice(
+      iter_combo_records(pool.occupation_to_tasks, pool.valid_onet_codes, args.num_tasks),
+      total_prompts,
+    ),
+    build_row_fn=build_row_fn,
+    output_file_path=output_paths.output_file_path,
+  )
 
-  print(f"Finished. Total prompts: {len(results)}")
-  print(f"Total combinations available: {len(task_combos)}")
+  print(f"Finished. Total prompts: {written_count}")
+  print(f"Total combinations available: {combo_count}")
   if not args.no_refs:
     print(
       "Task ref lookup summary: "

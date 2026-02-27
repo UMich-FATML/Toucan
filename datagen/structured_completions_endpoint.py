@@ -70,6 +70,18 @@ def get_args():
   )
   parser.add_argument("--model_name", type=str, required=True, help="Model name.")
   parser.add_argument("--input_file", type=str, required=True, help="Input prepared file.")
+  parser.add_argument(
+    "--start_idx",
+    type=int,
+    required=True,
+    help="Start index (inclusive) of rows to process.",
+  )
+  parser.add_argument(
+    "--batch_size",
+    type=int,
+    required=True,
+    help="Number of rows to process from start_idx.",
+  )
   parser.add_argument("--concurrency", type=int, default=100, help="Max concurrent requests.")
   parser.add_argument(
     "--base_url",
@@ -112,6 +124,10 @@ if not args.input_file.endswith("prepared.jsonl") and not args.input_file.endswi
   raise ValueError("Input file must end with prepared.json(l) for completion pipeline.")
 if args.concurrency <= 0:
   raise ValueError("--concurrency must be a positive integer.")
+if args.start_idx < 0:
+  raise ValueError("--start_idx must be a non-negative integer.")
+if args.batch_size <= 0:
+  raise ValueError("--batch_size must be a positive integer.")
 
 _base_url = args.base_url.rstrip("/")
 if not _base_url.endswith("/v1"):
@@ -128,15 +144,6 @@ except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
 print(f"Loaded output schema from: {args.output_schema_file}")
 
 model_abbreviation = get_model_abbreviation(args.model_name)
-base_name = args.input_file[: args.input_file.rfind(".")]
-if base_name.endswith("_4prepared"):
-  base_name = base_name[:-10]
-elif base_name.endswith("_prepared"):
-  base_name = base_name[:-9]
-saved_file = f"{base_name}_{model_abbreviation}_results.jsonl"
-output_dir = os.path.dirname(saved_file) or "."
-output_stem = os.path.splitext(os.path.basename(saved_file))[0]
-checkpoint_dir = os.path.join(output_dir, f"{output_stem}_tmp_checkpoints")
 
 
 def extract_message_text(content):
@@ -232,13 +239,13 @@ async def process_item_async(item, client):
   return processed_item
 
 
-def checkpoint_file_path(index):
+def checkpoint_file_path(index, checkpoint_dir):
   return os.path.join(checkpoint_dir, f"{index:08d}.json")
 
 
-def save_item_checkpoint(index, item):
+def save_item_checkpoint(index, item, checkpoint_dir):
   os.makedirs(checkpoint_dir, exist_ok=True)
-  checkpoint_path = checkpoint_file_path(index)
+  checkpoint_path = checkpoint_file_path(index, checkpoint_dir)
   temp_path = f"{checkpoint_path}.tmp"
   with open(temp_path, "w", encoding="utf-8") as f:
     json.dump(item, f, ensure_ascii=False)
@@ -246,7 +253,7 @@ def save_item_checkpoint(index, item):
   os.replace(temp_path, checkpoint_path)
 
 
-def load_item_checkpoints(processed_dataset):
+def load_item_checkpoints(processed_dataset, checkpoint_dir):
   completed_indices = set()
   if not os.path.isdir(checkpoint_dir):
     return completed_indices
@@ -297,11 +304,11 @@ def add_generation_config_to_metadata(dataset):
   return dataset
 
 
-async def generate_and_update(dataset, client):
+async def generate_and_update(dataset, client, checkpoint_dir):
   processed_dataset = copy.deepcopy(dataset)
   os.makedirs(checkpoint_dir, exist_ok=True)
 
-  completed_indices = load_item_checkpoints(processed_dataset)
+  completed_indices = load_item_checkpoints(processed_dataset, checkpoint_dir)
   if completed_indices:
     print(
       f"Loaded {len(completed_indices)} completed item checkpoints from {checkpoint_dir}."
@@ -334,7 +341,7 @@ async def generate_and_update(dataset, client):
     for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Generating completions"):
       index, processed_item = await task
       processed_dataset[index] = processed_item
-      save_item_checkpoint(index, processed_item)
+      save_item_checkpoint(index, processed_item, checkpoint_dir)
 
   processed_dataset = add_generation_config_to_metadata(processed_dataset)
   return processed_dataset
@@ -344,10 +351,41 @@ async def main():
   dataset = load_dataset_from_file(args.input_file)
   if not isinstance(dataset, list):
     dataset = [dataset]
+  total_rows = len(dataset)
+  if args.start_idx >= total_rows:
+    raise ValueError(
+      f"--start_idx ({args.start_idx}) must be smaller than dataset size ({total_rows})."
+    )
+
+  start_idx = args.start_idx
+  requested_end_idx = args.start_idx + args.batch_size
+  end_idx = min(requested_end_idx, total_rows)
+  target_dataset = dataset[start_idx:end_idx]
+
+  base_name = args.input_file[: args.input_file.rfind(".")]
+  if base_name.endswith("_4prepared"):
+    base_name = base_name[:-10]
+  elif base_name.endswith("_prepared"):
+    base_name = base_name[:-9]
+  saved_file = f"{base_name}_{model_abbreviation}_results_{start_idx}_{end_idx}.jsonl"
+  output_dir = os.path.dirname(saved_file) or "."
+  output_stem = os.path.splitext(os.path.basename(saved_file))[0]
+  checkpoint_dir = os.path.join(
+    output_dir,
+    f"{output_stem}_checkpoints_{start_idx}_{end_idx}",
+  )
+
+  print(
+    f"Dataset rows: {total_rows}. Requested range: "
+    f"[{start_idx}, {requested_end_idx}). Effective range: [{start_idx}, {end_idx})."
+  )
+  print(f"Processing {len(target_dataset)} rows.")
+  print(f"Output file: {saved_file}")
+  print(f"Checkpoint dir: {checkpoint_dir}")
 
   client = AsyncOpenAI(base_url=args.base_url, api_key=args.api_key)
   try:
-    updated_dataset = await generate_and_update(dataset, client)
+    updated_dataset = await generate_and_update(target_dataset, client, checkpoint_dir)
     save_dataset(updated_dataset, saved_file, convert_to_jsonl=True)
 
     if os.path.isdir(checkpoint_dir):

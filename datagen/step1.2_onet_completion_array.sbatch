@@ -1,9 +1,11 @@
 #!/bin/zsh
 #SBATCH --job-name=step1.2-onet-array
+#SBATCH --qos=lowprio
 #SBATCH --partition=lowprio
 #SBATCH --gres=gpu:8
 #SBATCH --cpus-per-task=96
 #SBATCH --time=7-00:00:00
+#SBATCH --array=0-16%100
 #SBATCH --output=../logs/slurm/step1.2-onet-array-%A_%a.out
 #SBATCH --error=../logs/slurm/step1.2-onet-array-%A_%a.err
 
@@ -15,9 +17,9 @@ mkdir -p ../logs/slurm
 # -----------------------------
 # User config (edit these)
 # -----------------------------
-INPUT_FILE="../data/onet_step1_smoke_20260222/onet_tasks_2_tasks_20_1771730852_prepared.jsonl"
-BATCH_SIZE=10
-MAX_PARALLEL=100
+INPUT_FILE="../data/three_onet_task_combos_no_refs/onet_tasks_3_tasks_all_1771962683_prepared.jsonl"
+BATCH_SIZE="10000"
+MAX_PARALLEL="100"
 
 MODEL_NAME="Kimi-K2-Thinking"
 STEP_TAG="1.2_onet"
@@ -27,10 +29,8 @@ OUTPUT_SCHEMA_FILE="./prompts/genq_from_onet_tasks_output_schema.json"
 # Example: VLLM_EXTRA_ARGS=(--port 8001 --max-model-len 32768)
 VLLM_EXTRA_ARGS=()
 
-# Submit with an externally computed array:
-#   total_rows=$(wc -l < "$INPUT_FILE" | tr -d '[:space:]')
-#   num_tasks=$(( (total_rows + BATCH_SIZE - 1) / BATCH_SIZE ))
-#   sbatch --array=0-$((num_tasks-1))%${MAX_PARALLEL} step1.2_onet_completion_array.sbatch
+# Submit with:
+#   sbatch step1.2_onet_completion_array.sbatch
 
 if [[ -z "$INPUT_FILE" ]]; then
     echo "Error: INPUT_FILE is empty. Set INPUT_FILE in this script." >&2
@@ -59,7 +59,7 @@ fi
 
 if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
     echo "Error: SLURM_ARRAY_TASK_ID is not set." >&2
-    echo "Submit with: sbatch --array=0-\$((num_tasks-1))%${MAX_PARALLEL} $0" >&2
+    echo "Submit with: sbatch $0" >&2
     exit 1
 fi
 

@@ -37,6 +37,9 @@ BAD_PATTERNS = (
 )
 MIN_QUESTION_LEN = 10
 SUPPORTED_MODE = "onet_tasks"
+SHARDED_RESULTS_FILENAME_RE = re.compile(
+  r"^(?P<prefix>.+)_results_(?P<start>\d+)_(?P<end>\d+)\.jsonl$"
+)
 
 
 @dataclass
@@ -72,7 +75,11 @@ def get_args():
     "--input_file",
     type=str,
     required=True,
-    help="Path to the input JSONL file with model responses.",
+    help=(
+      "Path to the input JSONL file with model responses. "
+      "If missing and ending with '_results.jsonl', the script will try merging "
+      "contiguous '*_results_<start>_<end>.jsonl' shards from the same directory."
+    ),
   )
   parser.add_argument(
     "--output_schema_file",
@@ -168,6 +175,103 @@ def load_output_schema_validator(output_schema_file):
 
   Draft202012Validator.check_schema(schema)
   return Draft202012Validator(schema)
+
+
+def discover_contiguous_result_shards(input_file):
+  if not input_file.endswith("_results.jsonl"):
+    raise FileNotFoundError(
+      f"Input file not found: {input_file}. "
+      "Automatic shard merge is only supported for missing '*_results.jsonl' targets."
+    )
+
+  input_dir = os.path.dirname(input_file) or "."
+  if not os.path.isdir(input_dir):
+    raise FileNotFoundError(
+      f"Input directory does not exist: {input_dir}"
+    )
+
+  input_basename = os.path.basename(input_file)
+  expected_prefix = input_basename[: -len("_results.jsonl")]
+
+  shard_entries = []
+  for file_name in os.listdir(input_dir):
+    match = SHARDED_RESULTS_FILENAME_RE.fullmatch(file_name)
+    if match is None:
+      continue
+    if match.group("prefix") != expected_prefix:
+      continue
+
+    start_idx = int(match.group("start"))
+    end_idx = int(match.group("end"))
+    shard_entries.append(
+      (start_idx, end_idx, os.path.join(input_dir, file_name))
+    )
+
+  if not shard_entries:
+    raise FileNotFoundError(
+      f"Input file not found: {input_file}. "
+      f"No matching shards found in {input_dir} for prefix '{expected_prefix}_results_<start>_<end>.jsonl'."
+    )
+
+  shard_entries.sort(key=lambda x: x[0])
+
+  for i, (start_idx, end_idx, shard_path) in enumerate(shard_entries):
+    if start_idx >= end_idx:
+      raise ValueError(
+        f"Invalid shard range in {shard_path}: start ({start_idx}) must be smaller than end ({end_idx})."
+      )
+
+    if i == 0:
+      continue
+
+    prev_start, prev_end, prev_path = shard_entries[i - 1]
+    if start_idx < prev_end:
+      raise ValueError(
+        "Overlapping shard ranges detected: "
+        f"{prev_path} ({prev_start}, {prev_end}) and {shard_path} ({start_idx}, {end_idx})."
+      )
+    if start_idx > prev_end:
+      raise ValueError(
+        "Gap in shard ranges detected: "
+        f"{prev_path} ends at {prev_end}, but next shard {shard_path} starts at {start_idx}."
+      )
+
+  return shard_entries
+
+
+def merge_result_shards(shard_entries, merged_output_file):
+  output_dir = os.path.dirname(merged_output_file) or "."
+  os.makedirs(output_dir, exist_ok=True)
+
+  line_count = 0
+  with open(merged_output_file, "w", encoding="utf-8") as f_out:
+    for _, _, shard_path in shard_entries:
+      with open(shard_path, "r", encoding="utf-8") as f_in:
+        for line in f_in:
+          if not line.strip():
+            continue
+          f_out.write(line if line.endswith("\n") else f"{line}\n")
+          line_count += 1
+
+  return line_count
+
+
+def resolve_or_merge_input_file(input_file):
+  if os.path.exists(input_file):
+    print(f"Using existing input file: {input_file}")
+    return input_file
+
+  print(f"Input file not found: {input_file}. Trying contiguous shard fallback...")
+  shard_entries = discover_contiguous_result_shards(input_file)
+  start_idx = shard_entries[0][0]
+  end_idx = shard_entries[-1][1]
+  merged_lines = merge_result_shards(shard_entries, input_file)
+
+  print(
+    f"Merged {len(shard_entries)} shard file(s) into {input_file}. "
+    f"Contiguous range: [{start_idx}, {end_idx}). Non-empty rows written: {merged_lines}."
+  )
+  return input_file
 
 
 def filter_metadata_by_target_tools(metadata, target_tools_str):
@@ -754,9 +858,10 @@ def main():
   print(f"Loaded output schema from: {args.output_schema_file}")
 
   print(f"Tool Use Question Processing Pipeline ({SUPPORTED_MODE} mode only). Arguments: {args}")
+  resolved_input_file = resolve_or_merge_input_file(args.input_file)
 
-  input_dir = os.path.dirname(args.input_file)
-  input_basename = os.path.basename(args.input_file)
+  input_dir = os.path.dirname(resolved_input_file) or "."
+  input_basename = os.path.basename(resolved_input_file)
   print(f"Input directory: {input_dir}")
   print(f"Input basename: {input_basename}")
 
@@ -776,7 +881,7 @@ def main():
 
   print("Step 1: Extracting questions from JSON responses...")
   extract_questions(
-    args.input_file, extracted_output, output_schema_validator, extracted_output_review
+    resolved_input_file, extracted_output, output_schema_validator, extracted_output_review
   )
 
   if not args.disable_sanitize:

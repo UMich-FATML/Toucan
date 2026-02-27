@@ -24,6 +24,7 @@ vllm_extra_args=("$@")
 # Color definitions
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+RED='\033[0;31m'
 NC='\033[0m'
 
 if [ -z "$input_file" ]; then
@@ -48,6 +49,56 @@ if [ ! -f "$schema_file" ]; then
     echo "Error: output schema file not found: $schema_file"
     exit 1
 fi
+
+activate_toucan_env() {
+    if ! command -v conda >/dev/null 2>&1; then
+        echo -e "${RED}[step1.2_onet] Error: conda is not available on PATH.${NC}" >&2
+        echo "[step1.2_onet] Install/load conda and ensure the 'toucan' env exists." >&2
+        exit 1
+    fi
+
+    if ! eval "$(conda shell.bash hook)"; then
+        echo -e "${RED}[step1.2_onet] Error: failed to initialize conda shell hook.${NC}" >&2
+        exit 1
+    fi
+
+    if ! conda activate toucan; then
+        echo -e "${RED}[step1.2_onet] Error: failed to activate conda env 'toucan'.${NC}" >&2
+        echo "[step1.2_onet] Create it and install dependencies before submitting the job." >&2
+        exit 1
+    fi
+
+    echo -e "${GREEN}[step1.2_onet] Activated conda environment: toucan${NC}"
+}
+
+verify_python_deps() {
+    local requirements_file="${SCRIPT_DIR}/../requirements.txt"
+    if ! python - <<'PY'
+import importlib.util
+import sys
+
+required = ["openai", "jsonschema", "tqdm"]
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+if missing:
+    print("Missing Python packages: " + ", ".join(missing), file=sys.stderr)
+    raise SystemExit(1)
+PY
+    then
+        echo -e "${RED}[step1.2_onet] Error: dependency preflight failed in env 'toucan'.${NC}" >&2
+        if [ -f "$requirements_file" ]; then
+            echo "[step1.2_onet] Install deps with: pip install -r $requirements_file" >&2
+        else
+            echo "[step1.2_onet] Install deps with: pip install openai jsonschema tqdm" >&2
+        fi
+        exit 1
+    fi
+
+    echo -e "${GREEN}[step1.2_onet] Python dependency preflight passed.${NC}"
+}
+
+# Fail fast on runtime environment issues before starting vLLM.
+activate_toucan_env
+verify_python_deps
 
 VLLM_PID=""
 
