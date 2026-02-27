@@ -2,14 +2,14 @@ import json
 import asyncio
 from typing import Dict, Any, List, Callable
 from openai import AsyncClient
-from pydantic import create_model, Field, BaseModel
 
-# 1. UPDATED IMPORTS: Use FunctionTool and RunContextWrapper
 from agents import FunctionTool, RunContextWrapper
+
 def load_prompt_template(template_path):
   """Load the prompt template from file."""
   with open(template_path, 'r', encoding='utf-8') as f:
     return f.read()
+
 class VirtualToolBackend:
     """
     Manages the LLM calls for generating virtual tool responses.
@@ -43,78 +43,70 @@ class VirtualToolBackend:
                 temperature=0.0,
                 response_format={"type": "json_object"}
             )
-            
+
             content = response.choices[0].message.content
-            
+
             try:
                 result = json.loads(content)
             except json.JSONDecodeError:
                 result = {"result": content, "error": "Failed to parse JSON output"}
-                
+
             return result
 
         except Exception as e:
             print(f"⚠️ Virtual Tool Generation Failed for {tool_name}: {e}")
             return {"error": str(e), "status": "failed"}
 
+
+def _make_strict_schema(input_schema: Dict) -> Dict:
+    """
+    Build a strict-mode-compatible JSON schema from a smithery inputSchema.
+    Ensures additionalProperties: false at every object level and that
+    required/properties are present.
+    """
+    schema = dict(input_schema)
+    schema.setdefault("type", "object")
+    schema.setdefault("properties", {})
+    schema.setdefault("required", [])
+    schema["additionalProperties"] = False
+
+    # Recursively fix nested object properties
+    for prop_name, prop_def in schema["properties"].items():
+        if isinstance(prop_def, dict) and prop_def.get("type") == "object":
+            schema["properties"][prop_name] = _make_strict_schema(prop_def)
+
+    return schema
+
+
 def create_dynamic_virtual_tool(tool_def: Dict, backend: VirtualToolBackend):
     """
     Dynamically creates a FunctionTool compatible with openai-agents.
+    Uses the raw smithery inputSchema as params_json_schema so the LLM
+    sees accurate type/items/required constraints (no lossy Pydantic conversion).
     """
     tool_name = tool_def.get('name')
     tool_desc = tool_def.get('description', '')
-    input_schema = tool_def.get('input_schema', {})
-    
-    # 1. Map types
-    type_map = {
-        'string': str, 'integer': int, 'number': float, 
-        'boolean': bool, 'array': list, 'object': dict
-    }
+    input_schema = tool_def.get('inputSchema', tool_def.get('input_schema', {}))
 
-    # 2. Build fields for Pydantic
-    fields = {}
-    properties = input_schema.get('properties', {})
-    required = set(input_schema.get('required', []))
+    params_schema = _make_strict_schema(input_schema)
 
-    for param_name, param_info in properties.items():
-        param_type = type_map.get(param_info.get('type', 'string'), str)
-        param_desc = param_info.get('description', '')
-        
-        if param_name in required:
-            default = ... 
-        else:
-            default = param_info.get('default', None)
-
-        fields[param_name] = (param_type, Field(default=default, description=param_desc))
-
-    # 3. Create Pydantic Model
-    DynamicParams = create_model(f"{tool_name}_Args", **fields)
-
-    # 4. Define the execution function
-    # NOTE: The signature must match what FunctionTool expects: (ctx, args_string)
     async def dynamic_run_function(ctx: RunContextWrapper[Any], args: str) -> str:
         """
         Executes the virtual tool logic.
         """
-        # Parse the JSON string arguments into our Pydantic model
         try:
-            params = DynamicParams.model_validate_json(args)
-            args_dict = params.model_dump()
-        except Exception as e:
+            args_dict = json.loads(args) if args else {}
+        except json.JSONDecodeError as e:
             return json.dumps({"error": f"Invalid arguments: {str(e)}"})
 
         print(f"👻 Virtual Tool Call: {tool_name}({args_dict})")
-        
-        # Call backend
+
         result = await backend.generate_response(tool_name, tool_def, args_dict)
-        
-        # FunctionTool expects a string return
         return json.dumps(result)
 
-    # 5. Return the FunctionTool Object
     return FunctionTool(
         name=tool_name,
         description=tool_desc,
-        params_json_schema=DynamicParams.model_json_schema(),
-        on_invoke_tool=dynamic_run_function
+        params_json_schema=params_schema,
+        on_invoke_tool=dynamic_run_function,
     )

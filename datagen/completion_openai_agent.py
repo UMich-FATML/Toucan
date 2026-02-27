@@ -112,8 +112,11 @@ def get_args():
 
     #tool parameters
     parser.add_argument("--virtual_tools", action="store_true", help="Use LLM-hallucinated tools instead of real MCP connections")
-    parser.add_argument("--virtual_tool_model", type=str, default="z-ai/glm-4.7", 
+    parser.add_argument("--virtual_tool_model", type=str, default="z-ai/glm-4.7",
                     help="Model to use for virtual tool hallucination (default: z-ai/glm-4.7)")
+    parser.add_argument("--mcp_server_dir", type=str, default="../mcp_servers/smithery_mcp_servers_0210",
+                    help="Path to directory of MCP server JSON files (named {server_id}.json). "
+                         "Enriches virtual tools with server analysis/descriptions from smithery files.")
     return parser.parse_args()
 
 args = get_args()
@@ -544,24 +547,29 @@ def create_agent_for_item(item, api_key=None, profile=None):
     # You will need to add --virtual_tools to your args parser
     if hasattr(args, 'virtual_tools') and args.virtual_tools:
         
-        print(f"👻 Configuring Agent with VIRTUAL tools (Model: {args.model_path})...")
-        virtual_backend = VirtualToolBackend(client, model_path=args.virtual_tool_model)
+        # With vllm_api a single server hosts one model — use the same model and client for both.
+        virtual_tool_model = args.model_path if args.engine == "vllm_api" else args.virtual_tool_model
+        print(f"👻 Configuring Agent with VIRTUAL tools (Agent: {args.model_path}, VirtualTool: {virtual_tool_model})...")
+        virtual_backend = VirtualToolBackend(client, model_path=virtual_tool_model)
         virtual_tool_funcs = []
 
         for server_info in mcp_servers:
-            # In your metadata, tools are often nested in 'remote_server_response' or 'server_info_crawled'
-            # We look in both places to be safe
-            remote_resp = server_info.get('remote_server_response', {})
-            crawled_info = server_info.get('server_info_crawled', {})
-            server_metadata = server_info.get('metadata', {})
-            server_name = server_metadata.get('name', '')
-            labeled_info = server_info.get('labels', {})
-            server_analysis = labeled_info.get('analysis', '')
-            
-            # Get tool definitions
-            tools_list = remote_resp.get('tools', [])
-            if not tools_list:
-                tools_list = crawled_info.get('tools', [])
+            # Start with inline fields from the input file
+            server_id = server_info.get('server_id', '')
+            server_name = server_info.get('server_name', '')
+            server_analysis = server_info.get('server_description', '')
+            tools_list = server_info.get('tools', [])
+
+            # Enrich from smithery directory if available (overrides inline values when found)
+            if args.mcp_server_dir and server_id:
+                smithery_path = os.path.join(args.mcp_server_dir, f"{server_id}.json")
+                if os.path.exists(smithery_path):
+                    with open(smithery_path) as sf:
+                        smithery_data = json.load(sf)
+                    smithery_tools = smithery_data.get('server', {}).get('tools', [])
+                    tools_list = smithery_tools if smithery_tools else tools_list
+                    server_analysis = smithery_data.get('analysis', server_analysis)
+                    server_name = smithery_data.get('server', {}).get('displayName', server_name)
 
             for tool_def in tools_list:
                 # Create the dynamic python function for this tool

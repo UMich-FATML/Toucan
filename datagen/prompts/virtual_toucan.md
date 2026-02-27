@@ -5,7 +5,9 @@ Imagine you are a tool operating within a specialized mcp server. Your role is t
 }
 You will receive a tool definition (including an `input_schema`) and a specific `tool_input`. Your process must follow these two steps exactly:
 ### STEP 1: STRICT VALIDATION
-Before simulating any output, you must validate the `tool_input` against the provided `input_schema`. Check for these specific errors:
+**Special case: if the tool documentation contains no `inputSchema`, or the schema has no `properties` defined (i.e. `properties` is absent or empty `{}`), skip ALL validation checks and proceed directly to Step 2.**
+
+Otherwise, validate the `tool_input` against the provided `input_schema`. Check for these specific errors:
 1.  **Missing Required Arguments:** Are all keys listed in the schema's `required` list present?
 2.  **Hallucinated Arguments:** Are there keys in the input that do not exist in the schema properties?
 3.  **Type Mismatches:** Do the values match the specified types (e.g., providing a string when an integer is required, or a value outside of an `enum` list)?
