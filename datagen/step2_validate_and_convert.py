@@ -90,9 +90,16 @@ def validate_entry(data, line_num, require_outputs):
     if not question or not isinstance(question, str) or len(question.strip()) < 10:
         return False, "missing_or_short_question"
 
-    # Check target_tools
-    target_tools = data.get("target_tools", "")
-    if not target_tools or not isinstance(target_tools, str) or not target_tools.strip():
+    # Check target_tools (accepts list from step1.3 or string)
+    target_tools = data.get("target_tools")
+    target_tools_str = data.get("target_tools_str", "")
+    if isinstance(target_tools, list):
+        if not target_tools:
+            return False, "missing_target_tools"
+    elif isinstance(target_tools, str):
+        if not target_tools.strip():
+            return False, "missing_target_tools"
+    elif not (target_tools_str and target_tools_str.strip()):
         return False, "missing_target_tools"
 
     # Check metadata
@@ -109,7 +116,12 @@ def validate_entry(data, line_num, require_outputs):
     if require_outputs:
         outputs = data.get("target_tools_with_outputs")
         if not outputs or not isinstance(outputs, list) or len(outputs) == 0:
-            return False, "missing_target_tools_with_outputs"
+            # Fall back to target_tools items with embedded output (new format)
+            ttools = data.get("target_tools")
+            if isinstance(ttools, list) and ttools:
+                outputs = ttools
+            else:
+                return False, "missing_target_tools_with_outputs"
         for i, tool_entry in enumerate(outputs):
             if not isinstance(tool_entry, dict):
                 return False, f"invalid_tool_entry_{i}"
@@ -127,7 +139,17 @@ def prepare_entry(data):
     completion_openai_agent.py. Replicates step 1.3's prepare_questions() logic.
     """
     metadata = data.get("metadata", {})
-    filtered_metadata = filter_metadata_by_target_tools(metadata, data["target_tools"])
+    target_tools = data.get("target_tools")
+    target_tools_str = data.get("target_tools_str", "")
+    if isinstance(target_tools, list) and not target_tools_str:
+        target_tools_str = ", ".join(
+            f"{t.get('server', '')}::{t.get('tool', '')}"
+            for t in target_tools
+            if isinstance(t, dict) and t.get("server") and t.get("tool")
+        )
+    elif isinstance(target_tools, str):
+        target_tools_str = target_tools
+    filtered_metadata = filter_metadata_by_target_tools(metadata, target_tools_str)
 
     result = {
         "messages": [
@@ -138,7 +160,8 @@ def prepare_entry(data):
         ],
         "metadata": {
             **filtered_metadata,
-            "target_tools": data["target_tools"],
+            "target_tools": target_tools,
+            "target_tools_str": target_tools_str,
             "question": data["question"],
             "min_distance": data.get("min_distance"),
             "duplicate_count": data.get("duplicate_count", 0),
@@ -165,7 +188,12 @@ def extract_answer_key(data):
     """
     outputs = data.get("target_tools_with_outputs")
     if not outputs or not isinstance(outputs, list):
-        return None
+        # New format: 'output' is embedded directly in each target_tools item
+        target_tools = data.get("target_tools")
+        if isinstance(target_tools, list) and target_tools:
+            outputs = target_tools
+        else:
+            return None
 
     answer_key = []
     for tool_entry in outputs:
