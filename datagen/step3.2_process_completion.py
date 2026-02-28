@@ -221,6 +221,7 @@ def filter_completions(input_file, output_file, preview_file=None):
     stats = {
         "total_processed": 0,
         "valid_entries": 0,
+        "valid_no_tool_calls": 0,
         "filtered_out": {
             "no_system_prompt": 0,
             "empty_final_assistant_message": 0,
@@ -239,7 +240,9 @@ def filter_completions(input_file, output_file, preview_file=None):
                 
                 if is_valid:
                     stats["valid_entries"] += 1
-                    
+                    if not has_tool_calls(data.get("messages", [])):
+                        stats["valid_no_tool_calls"] += 1
+
                     # Clean unusual line terminators
                     data = clean_json_object(data)
                     f_out.write(json.dumps(data, ensure_ascii=False) + '\n')
@@ -275,6 +278,7 @@ def print_filtering_summary(stats):
     
     print(f"Total Entries Processed: {total}")
     print(f"Valid Entries: {valid} ({(valid/total*100):.1f}%)")
+    print(f"  (of which no tool calls): {stats['valid_no_tool_calls']} ({(stats['valid_no_tool_calls']/total*100):.1f}%)")
     print(f"Filtered Out: {filtered} ({(filtered/total*100):.1f}%)")
     
     print("\nFiltering Breakdown:")

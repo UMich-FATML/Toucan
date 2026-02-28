@@ -37,4 +37,4 @@ python completion_openai_agent.py \
     --virtual_tool_model "${virtual_model}" \
     --mcp_server_dir "${mcp_server_dir}" \
     --max_workers 8 \
-    --timeout 120 \
+    --timeout 900 \

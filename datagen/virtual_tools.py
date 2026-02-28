@@ -83,8 +83,19 @@ def create_dynamic_virtual_tool(tool_def: Dict, backend: VirtualToolBackend):
     Dynamically creates a FunctionTool compatible with openai-agents.
     Uses the raw smithery inputSchema as params_json_schema so the LLM
     sees accurate type/items/required constraints (no lossy Pydantic conversion).
+
+    Tool name sanitization: dots are replaced with underscores because the OpenAI
+    API only allows [a-zA-Z0-9_-] in function names. The original name is preserved
+    in tool_def for the virtual backend so responses stay contextually accurate.
+
+    Strict schema fallback: if FunctionTool rejects the schema in strict mode
+    (e.g. schemas with additionalProperties or unsupported nested types), we retry
+    with strict_json_schema=False so the tool is still registered rather than
+    crashing the entire item.
     """
-    tool_name = tool_def.get('name')
+    raw_name = tool_def.get('name', '')
+    # Sanitize: replace dots (and any other chars invalid for OpenAI function names)
+    tool_name = raw_name.replace('.', '_')
     tool_desc = tool_def.get('description', '')
     input_schema = tool_def.get('inputSchema', tool_def.get('input_schema', {}))
 
@@ -101,12 +112,26 @@ def create_dynamic_virtual_tool(tool_def: Dict, backend: VirtualToolBackend):
 
         print(f"👻 Virtual Tool Call: {tool_name}({args_dict})")
 
-        result = await backend.generate_response(tool_name, tool_def, args_dict)
+        result = await backend.generate_response(raw_name, tool_def, args_dict)
         return json.dumps(result)
 
-    return FunctionTool(
-        name=tool_name,
-        description=tool_desc,
-        params_json_schema=params_schema,
-        on_invoke_tool=dynamic_run_function,
-    )
+    try:
+        return FunctionTool(
+            name=tool_name,
+            description=tool_desc,
+            params_json_schema=params_schema,
+            on_invoke_tool=dynamic_run_function,
+        )
+    except Exception as e:
+        print(f"⚠️  Tool {tool_name}: strict schema failed ({e}), retrying with strict_json_schema=False")
+        try:
+            return FunctionTool(
+                name=tool_name,
+                description=tool_desc,
+                params_json_schema=params_schema,
+                on_invoke_tool=dynamic_run_function,
+                strict_json_schema=False,
+            )
+        except Exception as e2:
+            print(f"❌ Tool {tool_name}: retry also failed ({e2}), tool will be skipped")
+            raise
