@@ -96,8 +96,76 @@ PY
     echo -e "${GREEN}[step1.2_onet] Python dependency preflight passed.${NC}"
 }
 
+compute_expected_output_file() {
+    python - "$input_file" "$start_idx" "$batch_size" "$model_name" "${SCRIPT_DIR}/model_configs.json" <<'PY'
+import json
+import sys
+
+input_file, start_idx_arg, batch_size_arg, model_name, config_file = sys.argv[1:6]
+start_idx = int(start_idx_arg)
+batch_size = int(batch_size_arg)
+
+def load_dataset_from_file(filename):
+    if filename.endswith(".json"):
+        with open(filename, "r", encoding="utf-8") as f:
+            return json.load(f)
+    if filename.endswith(".jsonl"):
+        data = []
+        with open(filename, "r", encoding="utf-8") as f:
+            for line in f:
+                data.append(json.loads(line))
+        return data
+    raise ValueError("Invalid file format. Please provide a .json or .jsonl file.")
+
+def get_model_short_name(model_path):
+    if "/" in model_path:
+        return model_path.split("/")[-1]
+    return model_path
+
+def get_model_abbreviation(model_path, cfg_path):
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            model_configs = json.load(f)
+        if model_path in model_configs:
+            return model_configs[model_path]["abbreviation"]
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError):
+        pass
+    return get_model_short_name(model_path)
+
+dataset = load_dataset_from_file(input_file)
+if not isinstance(dataset, list):
+    dataset = [dataset]
+
+total_rows = len(dataset)
+if start_idx >= total_rows:
+    raise ValueError(
+        f"--start_idx ({start_idx}) must be smaller than dataset size ({total_rows})."
+    )
+
+requested_end_idx = start_idx + batch_size
+end_idx = min(requested_end_idx, total_rows)
+
+base_name = input_file[: input_file.rfind(".")]
+if base_name.endswith("_4prepared"):
+    base_name = base_name[:-10]
+elif base_name.endswith("_prepared"):
+    base_name = base_name[:-9]
+
+model_abbreviation = get_model_abbreviation(model_name, config_file)
+saved_file = f"{base_name}_{model_abbreviation}_results_{start_idx}_{end_idx}.jsonl"
+print(saved_file)
+PY
+}
+
 # Fail fast on runtime environment issues before starting vLLM.
 activate_toucan_env
+expected_output_file=$(compute_expected_output_file)
+if [ -f "$expected_output_file" ]; then
+    echo -e "${GREEN}[step1.2_onet] Final output already exists. Skipping generation: ${expected_output_file}${NC}"
+    exit 0
+fi
+echo "[step1.2_onet] Expected output file: ${expected_output_file}"
+
 verify_python_deps
 
 VLLM_PID=""

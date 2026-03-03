@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:8
 #SBATCH --cpus-per-task=96
 #SBATCH --time=7-00:00:00
-#SBATCH --array=0-16%100
+#SBATCH --array=0-283%200
 #SBATCH --output=../logs/slurm/step1.2-onet-array-%A_%a.out
 #SBATCH --error=../logs/slurm/step1.2-onet-array-%A_%a.err
 
@@ -17,9 +17,8 @@ mkdir -p ../logs/slurm
 # -----------------------------
 # User config (edit these)
 # -----------------------------
-INPUT_FILE="../data/three_onet_task_combos_no_refs/onet_tasks_3_tasks_all_1771962683_prepared.jsonl"
-BATCH_SIZE="10000"
-MAX_PARALLEL="100"
+INPUT_FILE="../data/self_contained_two_onet_task_q_no_refs/onet_tasks_2_tasks_all_1772474997_prepared.jsonl"
+BATCH_SIZE="1000"
 
 MODEL_NAME="Kimi-K2-Thinking"
 STEP_TAG="1.2_onet"
@@ -44,11 +43,6 @@ fi
 
 if ! [[ "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
     echo "Error: BATCH_SIZE must be a positive integer." >&2
-    exit 1
-fi
-
-if ! [[ "$MAX_PARALLEL" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: MAX_PARALLEL must be a positive integer." >&2
     exit 1
 fi
 
@@ -92,7 +86,7 @@ fi
 start_idx=$(( task_id * BATCH_SIZE ))
 
 echo "[step1.2_onet_array] input_file=${INPUT_FILE}"
-echo "[step1.2_onet_array] total_rows=${total_rows}, batch_size=${BATCH_SIZE}, num_tasks=${num_tasks}, max_parallel=${MAX_PARALLEL}"
+echo "[step1.2_onet_array] total_rows=${total_rows}, batch_size=${BATCH_SIZE}, num_tasks=${num_tasks}"
 echo "[step1.2_onet_array] task_id=${task_id}, start_idx=${start_idx}"
 
 bash step1.2_onet_completion.sh \
