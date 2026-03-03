@@ -48,9 +48,16 @@ RATING_MAPS = {
         "mostly grounded": 4,
         "fully grounded": 5,
     },
+    "followup_quality": {
+        "skipped clarification": 1,
+        "vague or irrelevant questions": 2,
+        "partial clarification": 3,
+        "complete with minor issues": 4,
+        "complete clarification": 5,
+    },
 }
 
-ALL_DIMENSIONS = ["tool_call", "workflow_completion", "grounding"]
+ALL_DIMENSIONS = ["tool_call", "workflow_completion", "grounding", "followup_quality"]
 
 
 def get_args():
