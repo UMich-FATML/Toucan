@@ -64,8 +64,16 @@ Key Parameters:
 
 In this step, you can select from a variety of language models to generate questions, depending on your requirements for quality, speed, or resource usage. Specify the model name as the second argument to the script. For example, you might use a large instruction-tuned model like `mistralai/Mistral-Small-3.2-24B-Instruct-2506`.
 
+For questions generated with standard modes (single_server or multi_server):
+
 ```
 bash step1.2_completion.sh {Question File Generated From Step 1.1} {Model Name}
+```
+
+For questions grounded with O*NET occupations and tasks:
+
+```
+bash step1.2_onet_completion.sh {Question File Generated From O*NET Step 1.1} {Model Name}
 ```
 
 **1.3 Process Completion**
@@ -77,12 +85,12 @@ For questions generated with standard modes (single_server or multi_server):
 python step1.3_process_completion.py --input_file {Response File Generated From Step 1.2}
 ```
 
-For questions grounded with O*NET occupations and tasks (generate with step1.1_gen_questions_onet.py):
+For questions grounded with O*NET occupations and tasks (generate with step1.1_gen_questions_from_onet_tasks.py):
 ```
 python step1.3_process_completion_onet.py --input_file {Response File Generated From Step 1.2}
 ```
 
-Note: The O*NET processing script expects a different XML response format and handles tool_analysis and cross_tool_workflow fields specific to O*NET-grounded questions.
+Note: The O*NET processing script expects a JSON response format and handles tool_analysis and cross_tool_workflow fields specific to O*NET-grounded questions.
 
 ### Step 2: Question Quality Check
 

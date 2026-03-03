@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:8
 #SBATCH --cpus-per-task=96
 #SBATCH --time=7-00:00:00
-#SBATCH --array=0-283%200
+#SBATCH --array=0-130%200
 #SBATCH --output=../logs/slurm/step1.2-onet-array-%A_%a.out
 #SBATCH --error=../logs/slurm/step1.2-onet-array-%A_%a.err
 

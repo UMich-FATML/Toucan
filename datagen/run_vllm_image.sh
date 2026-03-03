@@ -28,7 +28,7 @@ model_path="${1:?Usage: bash start_vllm_docker.sh <model_path> [options]}"
 shift
 
 port=8000
-max_model_len=40960
+max_model_len=256000
 log_file=""
 image="vllm/vllm-openai:latest"
 
@@ -135,7 +135,6 @@ enroot start \
     "$model_path" \
         --port "$port" \
         --host 0.0.0.0 \
-        --max-model-len "$max_model_len" \
         "${vllm_extra_args[@]}" > "$log_file" 2>&1 &
 VLLM_PID=$!
 
