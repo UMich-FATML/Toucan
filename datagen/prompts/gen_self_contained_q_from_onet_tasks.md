@@ -73,6 +73,14 @@ Here are some search results related to the occupation and tasks. Use them to ad
 - Ensure the request cannot be reasonably fulfilled with tools from just a single server
 - Create scenarios that naturally require different types of services working together
 
+### Request Self-Containment
+
+- **All information the agent needs to make tool calls must be present in the request itself.** This includes specific values such as: project names, IDs, file names, URLs, dates, usernames, account names, search queries, locations, or any other concrete parameters required by the target tools.
+- The request must be **answerable only by calling the target tools** — it should not be fulfillable from general knowledge or common sense alone. The answer depends on live data or system state that only the tools can retrieve.
+- A well-formed request lets an agent immediately begin making tool calls without asking the user for clarification. If an agent receiving this request would reasonably say "I don't have enough information to proceed," the request is incomplete.
+- **Do not ask vague questions** like "can you check my account status?" — instead specify "can you check the status of account `acme-corp` and retrieve the last 5 invoices?" so the agent has concrete parameters to pass to the tools.
+
+
 ### Output Format
 
 Your response should include:
@@ -104,6 +112,6 @@ Machine-readable schema source of truth: `prompts/genq_from_onet_tasks_output_sc
       "output": "Email sent successfully to bob@email.com"
     }
   ],
-  "request": "A clear, realistic user request grounded in the workplace tasks that requires tool usage to fulfill."
+  "request": "A clear, realistic user request grounded in the workplace tasks that requires tool usage to fulfill. Must include all specific parameter values (names, IDs, dates, URLs, etc.) the agent needs to call the tools — the agent should be able to start making tool calls immediately without asking for clarification."
 }
 ```

@@ -14,10 +14,6 @@ Brainstorm a workplace scenario in which {OCCUPATION} needs to perform *all of t
 **Tasks:**
 {TASKS}
 
-Here are some search results related to the occupation and tasks. Use them to add constraints, context, and details to the request
-
-{TASK_REFERENCES}
-
 ## MCP Servers
 
 {SERVER_DESCRIPTIONS}
@@ -43,7 +39,6 @@ Here are some search results related to the occupation and tasks. Use them to ad
 - Include relevant context, constraints, and details that make the request engaging
 - Consider workflows that require multiple complementary tools working together across different services
 - Think about how different servers support each other in real-world use cases
-- Use the search results to add constraints, context, and details to the request
 
 ### Server and Target Tools Selection
 
