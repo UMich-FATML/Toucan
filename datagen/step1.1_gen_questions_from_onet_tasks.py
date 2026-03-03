@@ -98,6 +98,11 @@ def parse_args() -> argparse.Namespace:
     action="store_true",
     help="Disable loading task references from task_refs.parquet and use N/A references.",
   )
+  parser.add_argument(
+    "--self_contained",
+    action="store_true",
+    help="Use self-contained prompt templates for generating requests with all required parameters included.",
+  )
 
   args = parser.parse_args()
   if args.num_tools is None:
@@ -105,8 +110,15 @@ def parse_args() -> argparse.Namespace:
   return args
 
 
-def resolve_paths(script_dir: str, no_refs: bool) -> dict[str, str]:
-  prompt_template_filename = "genq_from_onet_tasks_no_refs.md" if no_refs else "genq_from_onet_tasks.md"
+def resolve_paths(script_dir: str, no_refs: bool, self_contained: bool) -> dict[str, str]:
+  if self_contained:
+    prompt_template_filename = (
+      "gen_self_contained_q_from_onet_tasks_no_refs.md"
+      if no_refs
+      else "gen_self_contained_q_from_onet_tasks.md"
+    )
+  else:
+    prompt_template_filename = "genq_from_onet_tasks_no_refs.md" if no_refs else "genq_from_onet_tasks.md"
   return {
     "tasks_to_servers_path": os.path.join(script_dir, "tasks_to_smithery_servers.jsonl"),
     "occupation_data_path": os.path.join(script_dir, "onet_db_30_1_text", "Occupation Data.txt"),
@@ -838,7 +850,7 @@ def main() -> None:
     np.random.seed(args.seed)
 
   script_dir = os.path.dirname(os.path.abspath(__file__))
-  paths = resolve_paths(script_dir, args.no_refs)
+  paths = resolve_paths(script_dir, args.no_refs, args.self_contained)
   inputs = load_inputs(paths, args)
   pool = build_generation_pool(inputs.tasks_list, inputs.server_index, args.num_tasks)
 
