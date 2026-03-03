@@ -89,6 +89,11 @@ def parse_args() -> argparse.Namespace:
         default="../mcp_servers/smithery_mcp_servers_0210",
     )
     parser.add_argument("--no_refs", action="store_true")
+    parser.add_argument(
+        "--withheld",
+        action="store_true",
+        help="Use withheld-info variant of the generation prompt (genq_from_onet_tasks_withheld.md).",
+    )
 
     args = parser.parse_args()
     if args.num_tools is None:
@@ -293,9 +298,9 @@ def main() -> None:
         )
     selected_onet_codes = load_selected_onet_codes(args.selected_occupations_file)
 
-    # Always use the base template (no _no_refs variant exists); --no_refs still
+    # --withheld selects the withheld-info prompt variant; --no_refs still
     # controls whether task references are loaded and inserted at runtime.
-    paths = resolve_paths(script_dir, no_refs=False)
+    paths = resolve_paths(script_dir, no_refs=False, withheld=args.withheld)
     inputs = load_inputs(paths, args)
 
     # Filter tasks to those with loadable servers, then build occupation index

@@ -98,6 +98,11 @@ def parse_args() -> argparse.Namespace:
     action="store_true",
     help="Disable loading task references from task_refs.parquet and use N/A references.",
   )
+  parser.add_argument(
+    "--withheld",
+    action="store_true",
+    help="Use withheld-info variant of the generation prompt (genq_from_onet_tasks_withheld.md).",
+  )
 
   args = parser.parse_args()
   if args.num_tools is None:
@@ -105,8 +110,13 @@ def parse_args() -> argparse.Namespace:
   return args
 
 
-def resolve_paths(script_dir: str, no_refs: bool) -> dict[str, str]:
-  prompt_template_filename = "genq_from_onet_tasks_no_refs.md" if no_refs else "genq_from_onet_tasks.md"
+def resolve_paths(script_dir: str, no_refs: bool, withheld: bool = False) -> dict[str, str]:
+  if withheld:
+    prompt_template_filename = "genq_from_onet_tasks_withheld.md"
+  elif no_refs:
+    prompt_template_filename = "genq_from_onet_tasks_no_refs.md"
+  else:
+    prompt_template_filename = "genq_from_onet_tasks.md"
   return {
     "tasks_to_servers_path": os.path.join(script_dir, "tasks_to_smithery_servers.jsonl"),
     "occupation_data_path": os.path.join(script_dir, "onet_db_30_1_text", "Occupation Data.txt"),
@@ -838,7 +848,7 @@ def main() -> None:
     np.random.seed(args.seed)
 
   script_dir = os.path.dirname(os.path.abspath(__file__))
-  paths = resolve_paths(script_dir, args.no_refs)
+  paths = resolve_paths(script_dir, args.no_refs, args.withheld)
   inputs = load_inputs(paths, args)
   pool = build_generation_pool(inputs.tasks_list, inputs.server_index, args.num_tasks)
 

@@ -32,6 +32,9 @@ def get_args():
                         help="Processed workflow completion scores JSONL.")
     parser.add_argument("--grounding_scores", type=str, default=None,
                         help="Processed grounding scores JSONL.")
+    parser.add_argument("--followup_quality_scores", type=str, default=None,
+                        help="Processed follow-up quality scores JSONL (withheld-info scenarios only). "
+                             "When provided, included in the overall weighted mean.")
     parser.add_argument("--output_file", type=str, required=True,
                         help="Output aggregated scores JSONL.")
     # Weights for overall score
@@ -41,6 +44,8 @@ def get_args():
                         help="Weight for workflow completion in overall score.")
     parser.add_argument("--weight_grounding", type=float, default=1.0,
                         help="Weight for grounding in overall score.")
+    parser.add_argument("--weight_followup_quality", type=float, default=1.0,
+                        help="Weight for follow-up quality in overall score (only applied when --followup_quality_scores is provided).")
     return parser.parse_args()
 
 
@@ -101,6 +106,26 @@ def aggregate_grounding(entries):
     }
 
 
+def aggregate_followup_quality(entries):
+    """
+    Aggregate follow-up quality entries for a single scenario.
+    One entry per scenario, score 1-5. Only present for withheld-info scenarios.
+    Entries with status='missing_reference' are excluded (not withheld-info scenarios).
+    """
+    if not entries:
+        return None
+    # Skip missing_reference auto-scores — those are non-withheld scenarios
+    scored = [e for e in entries if e.get("status") != "missing_reference" and e.get("score") is not None]
+    if not scored:
+        return None
+    e = scored[0]
+    sc = e.get("score")
+    return {
+        "score": sc,
+        "rating": e.get("rating", ""),
+    }
+
+
 def main():
     args = get_args()
 
@@ -108,11 +133,14 @@ def main():
     tool_call_data = load_scores(args.tool_call_scores)
     wf_data = load_scores(args.workflow_completion_scores)
     grounding_data = load_scores(args.grounding_scores)
+    followup_data = load_scores(args.followup_quality_scores)
 
     print(f"Loaded scores:")
     print(f"  Tool call:            {len(tool_call_data)} entries")
     print(f"  Workflow completion:   {len(wf_data)} entries")
     print(f"  Grounding:            {len(grounding_data)} entries")
+    if followup_data:
+        print(f"  Follow-up quality:    {len(followup_data)} entries")
 
     # --- Group by original_row_id ---
     tc_by_row = defaultdict(list)
@@ -133,8 +161,16 @@ def main():
         if rid is not None:
             gr_by_row[rid].append(e)
 
+    fq_by_row = defaultdict(list)
+    for e in followup_data:
+        rid = e.get("metadata", {}).get("original_row_id")
+        if rid is not None:
+            fq_by_row[rid].append(e)
+
     # --- Collect all row IDs ---
-    all_row_ids = sorted(set(tc_by_row.keys()) | set(wf_by_row.keys()) | set(gr_by_row.keys()))
+    all_row_ids = sorted(
+        set(tc_by_row.keys()) | set(wf_by_row.keys()) | set(gr_by_row.keys()) | set(fq_by_row.keys())
+    )
     print(f"  Unique scenarios: {len(all_row_ids)}")
 
     # --- Aggregate ---
@@ -143,6 +179,7 @@ def main():
         "tool_call": args.weight_tool_call,
         "workflow_completion": args.weight_workflow_completion,
         "grounding": args.weight_grounding,
+        "followup_quality": args.weight_followup_quality,
     }
 
     for rid in all_row_ids:
@@ -163,8 +200,13 @@ def main():
         if gr_agg is not None:
             record["grounding"] = gr_agg
 
+        # Follow-up quality (withheld-info scenarios only)
+        fq_agg = aggregate_followup_quality(fq_by_row.get(rid, []))
+        if fq_agg is not None:
+            record["followup_quality"] = fq_agg
+
         # Overall weighted mean
-        # Normalize scores to 0-1 range: tool_call is already 0-1, workflow_completion and grounding are 1-5 → map to 0-1
+        # Normalize scores to 0-1 range: tool_call is already 0-1, others are 1-5 → map to 0-1
         weighted_sum = 0.0
         active_weight = 0.0
 
@@ -184,6 +226,12 @@ def main():
             weighted_sum += weights["grounding"] * normalized
             active_weight += weights["grounding"]
 
+        if fq_agg is not None:
+            fq_score = fq_agg["score"] if fq_agg["score"] is not None else 0
+            normalized = (fq_score - 1) / 4 if fq_score > 0 else 0
+            weighted_sum += weights["followup_quality"] * normalized
+            active_weight += weights["followup_quality"]
+
         if active_weight > 0:
             record["overall"] = round(weighted_sum / active_weight, 4)
 
@@ -200,6 +248,7 @@ def main():
     tc_means = [r["tool_call_accuracy"]["mean"] for r in results if "tool_call_accuracy" in r]
     wf_scores = [r["workflow_completion"]["score"] for r in results if "workflow_completion" in r and r["workflow_completion"]["score"] is not None]
     gr_scores = [r["grounding"]["score"] for r in results if "grounding" in r and r["grounding"]["score"] is not None]
+    fq_scores = [r["followup_quality"]["score"] for r in results if "followup_quality" in r and r["followup_quality"]["score"] is not None]
 
     print(f"\n{'='*50}")
     print(f"Aggregation complete: {len(results)} scenarios")
@@ -209,6 +258,8 @@ def main():
         print(f"  Workflow Completion    — mean: {sum(wf_scores)/len(wf_scores):.2f}/5 (n={len(wf_scores)})")
     if gr_scores:
         print(f"  Grounding              — mean: {sum(gr_scores)/len(gr_scores):.2f}/5 (n={len(gr_scores)})")
+    if fq_scores:
+        print(f"  Follow-up Quality      — mean: {sum(fq_scores)/len(fq_scores):.2f}/5 (n={len(fq_scores)})")
     if overalls:
         print(f"  Overall (weighted)     — mean: {sum(overalls)/len(overalls):.3f} (n={len(overalls)})")
     print(f"Output: {args.output_file}")

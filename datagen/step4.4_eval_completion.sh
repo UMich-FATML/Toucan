@@ -67,7 +67,7 @@ base_path="${input_file%.jsonl}"
 
 # --- Expand dimensions ---
 if [ "$dimensions" == "all" ]; then
-    dimensions="tool_call,workflow_completion,grounding"
+    dimensions="tool_call,workflow_completion,grounding,followup_quality"
 fi
 
 IFS=',' read -ra DIM_ARRAY <<< "$dimensions"

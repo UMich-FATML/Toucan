@@ -178,6 +178,12 @@ def prepare_entry(data):
     if data.get("target_tools_with_outputs"):
         result["metadata"]["target_tools_with_outputs"] = data["target_tools_with_outputs"]
 
+    if data.get("withheld_info"):
+        result["metadata"]["withheld_info"] = data["withheld_info"]
+
+    if data.get("target_followup_questions"):
+        result["metadata"]["target_followup_questions"] = data["target_followup_questions"]
+
     return clean_json_object(result)
 
 
@@ -208,10 +214,18 @@ def extract_answer_key(data):
         return None
 
     row_id = data.get("metadata", {}).get("row_id")
-    return {
+    result = {
         "metadata": {"row_id": row_id},
-        "answer_key": answer_key
+        "answer_key": answer_key,
     }
+
+    if data.get("withheld_info"):
+        result["metadata"]["withheld_info"] = data["withheld_info"]
+
+    if data.get("target_followup_questions"):
+        result["metadata"]["target_followup_questions"] = data["target_followup_questions"]
+
+    return result
 
 
 def main():

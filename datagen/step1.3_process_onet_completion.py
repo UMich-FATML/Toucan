@@ -49,6 +49,8 @@ class ParsedAssistantPayload:
   target_tools_str: str
   question: str
   target_tools: list[Any]
+  withheld_info: Optional[list[Any]] = None
+  target_followup_questions: Optional[list[str]] = None
 
 
 @dataclass
@@ -427,12 +429,22 @@ def extract_individual_components(parsed_json, metadata=None):
   if not all([tool_analysis, target_tools_str, request_text]):
     return None
 
+  withheld_info = parsed_json.get("withheld_info", None)
+  if not isinstance(withheld_info, list) or len(withheld_info) == 0:
+    withheld_info = None
+
+  target_followup_questions = parsed_json.get("target_followup_questions", None)
+  if not isinstance(target_followup_questions, list) or len(target_followup_questions) == 0:
+    target_followup_questions = None
+
   payload = ParsedAssistantPayload(
     tool_analysis=tool_analysis.strip(),
     cross_tool_workflow=cross_tool_workflow.strip() if cross_tool_workflow else "",
     target_tools_str=target_tools_str.strip(),
     question=clean_html_comments(request_text.strip()),
     target_tools=target_tools_array,
+    withheld_info=withheld_info,
+    target_followup_questions=target_followup_questions,
   )
   return payload
 
@@ -543,6 +555,11 @@ def extract_questions(input_file, output_file, output_schema_validator, preview_
           },
         }
 
+        if parsed_response.withheld_info is not None:
+          result["withheld_info"] = parsed_response.withheld_info
+        if parsed_response.target_followup_questions is not None:
+          result["target_followup_questions"] = parsed_response.target_followup_questions
+
         result = clean_json_object(result)
         f_out.write(json.dumps(result, ensure_ascii=False) + "\n")
         successfully_parsed += 1
@@ -606,6 +623,12 @@ def build_sanitized_entry(item, metric):
   workflow = item.get("cross_tool_workflow")
   if workflow:
     entry["cross_tool_workflow"] = workflow
+
+  if item.get("withheld_info"):
+    entry["withheld_info"] = item["withheld_info"]
+
+  if item.get("target_followup_questions"):
+    entry["target_followup_questions"] = item["target_followup_questions"]
 
   return clean_json_object(entry)
 
@@ -816,6 +839,10 @@ def prepare_questions(input_file, output_file):
         result["metadata"]["tool_analysis"] = data["tool_analysis"]
       if data.get("cross_tool_workflow"):
         result["metadata"]["cross_tool_workflow"] = data["cross_tool_workflow"]
+      if data.get("withheld_info"):
+        result["metadata"]["withheld_info"] = data["withheld_info"]
+      if data.get("target_followup_questions"):
+        result["metadata"]["target_followup_questions"] = data["target_followup_questions"]
 
       result = clean_json_object(result)
       outf.write(json.dumps(result, ensure_ascii=False) + "\n")
