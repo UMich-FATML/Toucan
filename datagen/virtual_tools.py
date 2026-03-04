@@ -1,6 +1,6 @@
 import json
 import asyncio
-from typing import Dict, Any, List, Callable
+from typing import Dict, Any, List, Callable, Optional
 from openai import AsyncClient
 
 from agents import FunctionTool, RunContextWrapper
@@ -18,15 +18,37 @@ class VirtualToolBackend:
         self.client = client
         self.model = model_path
 
-    async def generate_response(self, tool_name: str, tool_doc: Dict, tool_args: Dict) -> Dict:
+    async def generate_response(self, tool_name: str, tool_doc: Dict, tool_args: Dict,
+                                scenario_context: Optional[Dict] = None) -> Dict:
         """
         Hits the LLM to hallucinate a response for the tool.
+        If scenario_context is provided, includes the user question and
+        a reference expected output to guide realistic generation.
         """
         user_prompt = (
             f"Tool Documentation: {json.dumps(tool_doc)}\n\n"
             f"Generate a realistic JSON response for the following input:\n"
             f"{json.dumps(tool_args)}"
         )
+
+        if scenario_context:
+            question = scenario_context.get('question', '')
+            tool_analysis = scenario_context.get('tool_analysis', '')
+            workflow_analysis = scenario_context.get('workflow_analysis', '')
+            expected_output = scenario_context.get('expected_output', '')
+            if question:
+                user_prompt += f"\n\nScenario context (the user's original request): {question}"
+            if tool_analysis:
+                user_prompt += f"\n\nTool analysis (how the tools relate to this scenario): {tool_analysis}"
+            if workflow_analysis:
+                user_prompt += f"\n\nWorkflow analysis (how tools chain together): {workflow_analysis}"
+            if expected_output:
+                user_prompt += (
+                    f"\n\nGeneric reference output (use as a loose guide for style and "
+                    f"detail level, but produce your response holistically based on "
+                    f"the full scenario context above — this reference is NOT a hard "
+                    f"requirement):\n{expected_output}"
+                )
 
         # Ensure prompt file exists or use default
         system_content = load_prompt_template('./prompts/virtual_toucan.md')
@@ -78,7 +100,8 @@ def _make_strict_schema(input_schema: Dict) -> Dict:
     return schema
 
 
-def create_dynamic_virtual_tool(tool_def: Dict, backend: VirtualToolBackend):
+def create_dynamic_virtual_tool(tool_def: Dict, backend: VirtualToolBackend,
+                               scenario_context: Optional[Dict] = None):
     """
     Dynamically creates a FunctionTool compatible with openai-agents.
     Uses the raw smithery inputSchema as params_json_schema so the LLM
@@ -112,7 +135,8 @@ def create_dynamic_virtual_tool(tool_def: Dict, backend: VirtualToolBackend):
 
         print(f"👻 Virtual Tool Call: {tool_name}({args_dict})")
 
-        result = await backend.generate_response(raw_name, tool_def, args_dict)
+        result = await backend.generate_response(raw_name, tool_def, args_dict,
+                                                 scenario_context=scenario_context)
         return json.dumps(result)
 
     try:

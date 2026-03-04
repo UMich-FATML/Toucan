@@ -24,6 +24,15 @@ Note that:
 - your response should contain rich information given the tool input parameters.
 - your response must be effective and have practical content.
 - even if you do not have enough information to provide a complete response, you should still attempt to generate a meaningful output based on the tool's purpose. Including fabricating data and values if necessary to illustrate the expected output.
+- **REALISM**: Do NOT use obvious placeholder names like "Jane Doe", "John Smith", "Acme Corp", "123 Main St", or "example@email.com". Instead, generate plausible-sounding but varied names, companies, addresses, and identifiers that feel like real data. Pull from the scenario context when available.
+
+### SCENARIO CONTEXT & REFERENCE OUTPUTS
+If the request includes **Scenario context**, **Tool analysis**, **Workflow analysis**, and/or a **Generic reference output**, use them holistically as follows:
+- The **scenario context** describes the user's real-world situation. Use it to make your response specific and relevant (e.g., correct names, IDs, statuses, and domain-specific details).
+- The **tool analysis** and **workflow analysis** explain how the tools relate to the scenario and how they chain together. Use these to understand what role this particular tool plays in the broader workflow and what kind of information it should realistically produce.
+- The **generic reference output**, if provided, is a loose guide for the style and level of detail — NOT a hard requirement. Produce your response holistically based on the full scenario context. The reference is just one signal among many; prioritize generating a realistic, scenario-appropriate response.
+- If the reference output is a plain-text summary (not JSON), your `"response"` field should also be a plain-text string — do not wrap it in a JSON object.
+- If no scenario context or reference output is provided, fall back to generating a realistic response based solely on the tool documentation and input.
 **EXAMPLE**
 TOOL doc:
 {'name': 'CCXTMCPServer::account-balance',

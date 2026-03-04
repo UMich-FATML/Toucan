@@ -90,9 +90,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no_refs", action="store_true")
     parser.add_argument(
-        "--withheld",
+        "--self_contained",
         action="store_true",
-        help="Use withheld-info variant of the generation prompt (genq_from_onet_tasks_withheld.md).",
+        help="Use self contained variant of the generation prompt (gen_self_contained_q_from_onet_tasks_md).",
     )
 
     args = parser.parse_args()
@@ -298,9 +298,9 @@ def main() -> None:
         )
     selected_onet_codes = load_selected_onet_codes(args.selected_occupations_file)
 
-    # --withheld selects the withheld-info prompt variant; --no_refs still
+    ##--no_refs still
     # controls whether task references are loaded and inserted at runtime.
-    paths = resolve_paths(script_dir, no_refs=False, withheld=args.withheld)
+    paths = resolve_paths(script_dir, no_refs=False, self_contained=args.self_contained)
     inputs = load_inputs(paths, args)
 
     # Filter tasks to those with loadable servers, then build occupation index

@@ -23,7 +23,7 @@ user_model=${5:-"openai/gpt-4o"}
 vllm_url=${6:-"http://localhost:8000/v1"}
 mcp_server_dir=${7:-"../mcp_servers/smithery_mcp_servers_0210"}
 step="3.21m"
-user_max_turns=8
+user_max_turns=5
 
 if [ -z "$input_file" ]; then
     echo "Error: Input file is required."
