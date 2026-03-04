@@ -25,15 +25,15 @@ except ImportError:
   raise SystemExit(1)
 
 BAD_PATTERNS = (
-  "i cannot",
-  "i can't",
-  "i'm unable",
-  "i apologize",
-  "i'm sorry",
+  # "i cannot",
+  # "i can't",
+  # "i'm unable",
+  # "i apologize",
+  # "i'm sorry",
   "bad_document",
-  "please provide",
-  "could you please",
-  "i need more information",
+  # "please provide",
+  # "could you please",
+  # "i need more information",
 )
 MIN_QUESTION_LEN = 10
 SUPPORTED_MODE = "onet_tasks"
@@ -354,39 +354,35 @@ def prune_metadata_for_output(metadata):
   return copied_metadata
 
 
-def extract_json_payload(response_content):
+def extract_json_payload_candidates(response_content):
   """
-  Strict JSON extraction:
-  1) Prefer fenced ```json ... ``` blocks.
-  2) Otherwise parse the full content as JSON.
+  Build ordered JSON parsing candidates:
+  1) Last fenced ```json ... ``` block (if present).
+  2) Full assistant content.
   """
   if not isinstance(response_content, str):
-    return None
+    return []
 
   text = response_content.strip()
   if not text:
-    return None
+    return []
 
+  candidates = []
   fenced_matches = re.findall(r"```json\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
   if fenced_matches:
-    candidate = fenced_matches[-1].strip()
-    try:
-      parsed = json.loads(candidate)
-    except json.JSONDecodeError as e:
-      print(f"Error parsing fenced JSON response: {e}")
-      return None
-  else:
-    try:
-      parsed = json.loads(text)
-    except json.JSONDecodeError as e:
-      print(f"Error parsing JSON response: {e}")
-      return None
+    candidates.append(("fenced JSON response", fenced_matches[-1].strip()))
 
-  if not isinstance(parsed, dict):
-    print("Parsed JSON payload is not an object. Skipping.")
-    return None
+  candidates.append(("JSON response", text))
 
-  return parsed
+  deduped_candidates = []
+  seen_payloads = set()
+  for source_label, candidate in candidates:
+    if not candidate or candidate in seen_payloads:
+      continue
+    deduped_candidates.append((source_label, candidate))
+    seen_payloads.add(candidate)
+
+  return deduped_candidates
 
 
 def parse_json_response(response_content, output_schema_validator, metadata=None):
@@ -399,17 +395,42 @@ def parse_json_response(response_content, output_schema_validator, metadata=None
     output_schema_validator: JSON schema validator for assistant payloads.
     metadata: Optional row metadata.
   """
-  parsed_json = extract_json_payload(response_content)
-  if parsed_json is None:
+  candidate_payloads = extract_json_payload_candidates(response_content)
+  if not candidate_payloads:
     return None
 
-  try:
-    output_schema_validator.validate(parsed_json)
-  except JsonSchemaValidationError as e:
-    print(f"Output schema validation failed: {e.message}")
-    return None
+  parse_errors = []
+  schema_errors = []
 
-  return extract_individual_components(parsed_json, metadata)
+  for source_label, candidate in candidate_payloads:
+    try:
+      parsed_json = json.loads(candidate)
+    except json.JSONDecodeError as e:
+      parse_errors.append((source_label, str(e)))
+      continue
+
+    if not isinstance(parsed_json, dict):
+      parse_errors.append((source_label, "Parsed JSON payload is not an object."))
+      continue
+
+    try:
+      output_schema_validator.validate(parsed_json)
+    except JsonSchemaValidationError as e:
+      schema_errors.append((source_label, e.message))
+      continue
+
+    return extract_individual_components(parsed_json, metadata)
+
+  for source_label, message in parse_errors:
+    if source_label == "fenced JSON response":
+      print(f"Error parsing fenced JSON response: {message}")
+    else:
+      print(f"Error parsing JSON response: {message}")
+
+  for source_label, message in schema_errors:
+    print(f"Output schema validation failed for {source_label}: {message}")
+
+  return None
 
 
 def extract_individual_components(parsed_json, metadata=None):
