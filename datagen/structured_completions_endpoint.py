@@ -73,14 +73,14 @@ def get_args():
   parser.add_argument(
     "--start_idx",
     type=int,
-    required=True,
+    default=0,
     help="Start index (inclusive) of rows to process.",
   )
   parser.add_argument(
     "--batch_size",
     type=int,
-    required=True,
-    help="Number of rows to process from start_idx.",
+    default=None,
+    help="Optional number of rows to process from start_idx.",
   )
   parser.add_argument("--concurrency", type=int, default=100, help="Max concurrent requests.")
   parser.add_argument(
@@ -126,7 +126,7 @@ if args.concurrency <= 0:
   raise ValueError("--concurrency must be a positive integer.")
 if args.start_idx < 0:
   raise ValueError("--start_idx must be a non-negative integer.")
-if args.batch_size <= 0:
+if args.batch_size is not None and args.batch_size <= 0:
   raise ValueError("--batch_size must be a positive integer.")
 
 _base_url = args.base_url.rstrip("/")
@@ -347,33 +347,54 @@ async def generate_and_update(dataset, client, checkpoint_dir):
   return processed_dataset
 
 
-async def main():
-  dataset = load_dataset_from_file(args.input_file)
-  if not isinstance(dataset, list):
-    dataset = [dataset]
-  total_rows = len(dataset)
+def get_input_base_name(input_file):
+  base_name = input_file[: input_file.rfind(".")]
+  if base_name.endswith("_4prepared"):
+    return base_name[:-10]
+  if base_name.endswith("_prepared"):
+    return base_name[:-9]
+  return base_name
+
+
+def resolve_processing_range(total_rows):
+  if total_rows <= 0:
+    raise ValueError(f"Input dataset is empty: {args.input_file}")
   if args.start_idx >= total_rows:
     raise ValueError(
       f"--start_idx ({args.start_idx}) must be smaller than dataset size ({total_rows})."
     )
 
   start_idx = args.start_idx
-  requested_end_idx = args.start_idx + args.batch_size
+  requested_end_idx = (
+    total_rows if args.batch_size is None else args.start_idx + args.batch_size
+  )
   end_idx = min(requested_end_idx, total_rows)
+  return start_idx, requested_end_idx, end_idx
+
+
+def build_output_paths(base_name, start_idx, end_idx):
+  range_mode = args.batch_size is not None or args.start_idx != 0
+  if range_mode:
+    saved_file = f"{base_name}_{model_abbreviation}_results_{start_idx}_{end_idx}.jsonl"
+    checkpoint_dir = (
+      f"{base_name}_{model_abbreviation}_results_checkpoints_{start_idx}_{end_idx}"
+    )
+  else:
+    saved_file = f"{base_name}_{model_abbreviation}_results.jsonl"
+    checkpoint_dir = f"{base_name}_{model_abbreviation}_results_checkpoints"
+  return saved_file, checkpoint_dir
+
+
+async def main():
+  dataset = load_dataset_from_file(args.input_file)
+  if not isinstance(dataset, list):
+    dataset = [dataset]
+  total_rows = len(dataset)
+  start_idx, requested_end_idx, end_idx = resolve_processing_range(total_rows)
   target_dataset = dataset[start_idx:end_idx]
 
-  base_name = args.input_file[: args.input_file.rfind(".")]
-  if base_name.endswith("_4prepared"):
-    base_name = base_name[:-10]
-  elif base_name.endswith("_prepared"):
-    base_name = base_name[:-9]
-  saved_file = f"{base_name}_{model_abbreviation}_results_{start_idx}_{end_idx}.jsonl"
-  output_dir = os.path.dirname(saved_file) or "."
-  output_stem = os.path.splitext(os.path.basename(saved_file))[0]
-  checkpoint_dir = os.path.join(
-    output_dir,
-    f"{output_stem}_checkpoints_{start_idx}_{end_idx}",
-  )
+  base_name = get_input_base_name(args.input_file)
+  saved_file, checkpoint_dir = build_output_paths(base_name, start_idx, end_idx)
 
   print(
     f"Dataset rows: {total_rows}. Requested range: "
