@@ -5,23 +5,17 @@ import argparse
 import copy
 import json
 import re
-import requests
-import concurrent.futures
-import multiprocessing
 import types
 import asyncio
 import base64
-import threading
-import queue
 import signal
 import atexit
-import os
-from time import sleep, time
+import shutil
+from time import time
 from tqdm import tqdm
 from virtual_tools import VirtualToolBackend, create_dynamic_virtual_tool
-from wrapt_timeout_decorator import timeout
 
-from utils import load_dataset_from_file, save_dataset, make_api_request_with_retry, get_model_short_name, validate_api_pool_from_file, check_if_api_key_is_valid, safe_save_checkpoint, get_model_abbreviation
+from utils import load_dataset_from_file, save_dataset, validate_api_pool_from_file, get_model_abbreviation
 
 
 # Suppress OpenAI Agent SDK tracing logs before importing
@@ -36,7 +30,7 @@ from agents.run_context import RunContextWrapper
 from agents import Agent, OpenAIResponsesModel, Runner, SQLiteSession
 from agents.tracing import set_tracing_disabled
 set_tracing_disabled(True)
-from openai import AsyncClient
+from openai import AsyncClient, AsyncOpenAI
 from typing import Dict, Any, List, Optional
 from pydantic import create_model, Field, BaseModel
 
@@ -82,18 +76,16 @@ def get_args():
     parser.add_argument("--model_path", type=str, default="openai/gpt-oss-120b",
                         help="Model path for inference")
     parser.add_argument("--input_file", type=str, default=None, help="Input dataset file name")
-    parser.add_argument("--checkpoint_every", type=int, default=16, help="Save checkpoint every n completed items")
-    parser.add_argument("--openrouter_url", type=str, default="https://openrouter.ai/api/v1", help="OpenRouter API URL")
-    parser.add_argument("--openrouter_api_key", type=str, default="", help="OpenRouter API Key")
-    parser.add_argument("--vllm_api_url", type=str, default="http://localhost:8000/v1", help="vLLM API URL")
-    parser.add_argument("--vllm_api_key", type=str, default="EMPTY", help="vLLM API Key")
+    parser.add_argument("--start_idx", type=int, default=0, help="Start index (inclusive) of rows to process.")
+    parser.add_argument("--batch_size", type=int, default=None, help="Optional number of rows to process from start_idx.")
+    parser.add_argument("--base_url", type=str, default="http://localhost:8000/v1", help="OpenAI-compatible API base URL ending with /v1.")
+    parser.add_argument("--api_key", type=str, default="EMPTY", help="API key for the endpoint.")
     parser.add_argument("--smithery_api_key", type=str, default="", help="Smithery API Key")
     parser.add_argument("--smithery_profile", type=str, default="", help="Smithery Profile")
     parser.add_argument("--smithery_api_pool", type=str, default="smithery_api_pool.json", help="Path to Smithery API pool JSON file")
     parser.add_argument("--max_workers", type=int, default=None, help="Maximum number of parallel workers (default: use API pool size)")
 
     # Generation Parameters
-    parser.add_argument('--engine', default="vllm_api", type=str, choices=["vllm_api", "openrouter_api"])
     parser.add_argument("--max_tokens", type=int, default=32768)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top_p", type=float, default=1.0)
@@ -112,8 +104,6 @@ def get_args():
 
     #tool parameters
     parser.add_argument("--virtual_tools", action="store_true", help="Use LLM-hallucinated tools instead of real MCP connections")
-    parser.add_argument("--virtual_tool_model", type=str, default="z-ai/glm-4.7",
-                    help="Model to use for virtual tool hallucination (default: z-ai/glm-4.7)")
     parser.add_argument("--mcp_server_dir", type=str, default="../mcp_servers/smithery_mcp_servers_0210",
                     help="Path to directory of MCP server JSON files (named {server_id}.json). "
                          "Enriches virtual tools with server analysis/descriptions from smithery files.")
@@ -129,68 +119,20 @@ if args.input_file is None:
 if not args.input_file.endswith("prepared.jsonl") and not args.input_file.endswith("prepared.json"):
     print("Error: Input file must end with prepared.json(l) for completion pipeline. Please make sure you are using the correct input file.")
     exit(1)
+if args.start_idx < 0:
+    raise ValueError("--start_idx must be a non-negative integer.")
+if args.batch_size is not None and args.batch_size <= 0:
+    raise ValueError("--batch_size must be a positive integer.")
 
-# Constants for the local vllm engine
-MODEL_NAME = args.model_path
+normalized_base_url = args.base_url.rstrip("/").removesuffix("/chat/completions")
+if not normalized_base_url.endswith("/v1"):
+    raise ValueError("--base_url must end with /v1.")
+args.base_url = normalized_base_url
+
 INPUT_FILE_NAME = args.input_file 
-CHECKPOINT_EVERY = args.checkpoint_every
 
 model_abbreviation = get_model_abbreviation(args.model_path)
 config_str = f"{model_abbreviation}_{args.reasoning_effort}_pfc" if args.parallel_function_calls else f"{model_abbreviation}_{args.reasoning_effort}_sfc"
-
-base_name = INPUT_FILE_NAME[:INPUT_FILE_NAME.rfind('.')]
-if base_name.endswith("_4prepared"):
-    base_name = base_name[:-10]  # Remove "_4prepared"
-
-if args.num_trials > 1:
-    checkpoint_files = [
-        f"{base_name}_{config_str}_results{i}_checkpoint.json"
-        for i in range(args.num_trials)
-    ]
-    saved_files = [
-        f"{base_name}_{config_str}_results{i}.jsonl"
-        for i in range(args.num_trials)
-    ]
-else:
-    checkpoint_file = f"{base_name}_{config_str}_results_checkpoint.json"
-    saved_file = f"{base_name}_{config_str}_results.jsonl"
-
-# Resolve API keys from env vars before setting up headers
-if args.engine == "openrouter_api" and not args.openrouter_api_key:
-    args.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
-    if not args.openrouter_api_key:
-        print("⚠️  Warning: OpenRouter API Key is missing! (Env var OPENROUTER_API_KEY not found)")
-
-# API Setups
-if args.engine == "openrouter_api":
-    API_ENDPOINT = args.openrouter_url + "/chat/completions"
-    API_HEADERS = {
-        "Authorization": f"Bearer {args.openrouter_api_key}",
-        "Content-Type": "application/json"
-    }
-    API_PARAMS = {
-        "model": args.model_path,
-        "max_tokens": args.max_tokens,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-        "parallel_tool_calls": args.parallel_function_calls,
-        "reasoning": {"effort": args.reasoning_effort},
-    }
-
-elif args.engine == "vllm_api":
-    API_ENDPOINT = args.vllm_api_url + "/chat/completions"
-    API_HEADERS = {
-        "Authorization": f"Bearer {args.vllm_api_key}",
-        "Content-Type": "application/json"
-    }
-    API_PARAMS = {
-        "model": args.model_path,
-        # "max_tokens": args.max_tokens # If a user does not specify a max_tokens in their request, then the minimum of max_new_tokens and (max_model_len - prompt_tokens) will be used.
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-        "parallel_tool_calls": args.parallel_function_calls,
-        "reasoning": {"effort": args.reasoning_effort},
-    }
 
 # Global API pool variable
 smithery_api_pool = None
@@ -528,18 +470,10 @@ def create_agent_for_item(item, api_key=None, profile=None):
         return None
     
     # --- CLIENT SETUP (Shared for both modes) ---
-    if args.engine == "openrouter_api":
-        client = AsyncClient(
-            base_url=args.openrouter_url,
-            api_key=args.openrouter_api_key,
-        )
-    elif args.engine == "vllm_api":
-        client = AsyncClient(
-            base_url=args.vllm_api_url,
-            api_key=args.vllm_api_key,
-        )
-    else:
-        return None
+    client = AsyncClient(
+        base_url=args.base_url,
+        api_key=args.api_key,
+    )
 
     model = OpenAIResponsesModel(args.model_path, openai_client=client)
 
@@ -547,10 +481,8 @@ def create_agent_for_item(item, api_key=None, profile=None):
     # You will need to add --virtual_tools to your args parser
     if hasattr(args, 'virtual_tools') and args.virtual_tools:
         
-        # With vllm_api a single server hosts one model — use the same model and client for both.
-        virtual_tool_model = args.model_path if args.engine == "vllm_api" else args.virtual_tool_model
-        print(f"👻 Configuring Agent with VIRTUAL tools (Agent: {args.model_path}, VirtualTool: {virtual_tool_model})...")
-        virtual_backend = VirtualToolBackend(client, model_path=virtual_tool_model)
+        print(f"👻 Configuring Agent with VIRTUAL tools (Agent: {args.model_path}, VirtualTool: {args.model_path})...")
+        virtual_backend = VirtualToolBackend(client, model_path=args.model_path)
         virtual_tool_funcs = []
 
         for server_info in mcp_servers:
@@ -886,226 +818,77 @@ async def process_single_item_agent_async(item, api_key=None, profile=None):
     
     return item
 
-@timeout(args.timeout, use_signals=False)
-def process_single_item_agent(item, api_key=None, profile=None):
-    """Process a single item using agent inference with timeout"""
-    prompt_id = item.get('metadata', {}).get('prompt_id', 'unknown')
-    
-    try:
-        return asyncio.run(process_single_item_agent_async(item, api_key, profile))
-    except Exception as e:
-        print(f"Error processing item {prompt_id}: {str(e)}")
-        message = item["messages"]
-        item['messages'] = message + [
-            {
-                "role": "assistant",
-                "content": f"[ERROR: {str(e)}]"
-            }
-        ]
-        return item
+def extract_message_text(content):
+    if isinstance(content, str):
+        return content
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        text_chunks = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text_chunks.append(part.get("text", ""))
+        return "".join(text_chunks)
+    return str(content)
 
 
-# Dynamic processing with timeout resilience
-class DynamicProcessor:
-    """
-    Dynamic processor that handles individual items with timeout resilience.
-    Each item is processed independently so timeouts don't block other items.
-    """
-    
-    def __init__(self, max_workers=None, checkpoint_every=16):
-        self.max_workers = max_workers or len(smithery_api_pool) if smithery_api_pool else 1
-        self.checkpoint_every = checkpoint_every
-        self.processed_count = 0
-        self.lock = threading.Lock()
-        self.completed_items_list = []  # Thread-safe list for completed items
-        
-    def process_single_item_with_fallback(self, item_data):
-        """Process a single item with fallback to direct API if agent fails"""
-        item, item_index, api_key, profile = item_data
-        prompt_id = item.get('metadata', {}).get('prompt_id', f'item_{item_index}')
-        
-        # Try agent processing first if available
-        agent_failed = False
-        agent_error = None
-        
-        if args.agent:
-            try:
-                processed_item = process_single_item_agent(item, api_key, profile)
-                return processed_item, item_index, True, None  # success, no error
-            except Exception as e:
-                print(f"❌ Agent processing failed for item {prompt_id}: {str(e)}")
-                agent_error = str(e)
-                # No fallback to direct API — we only want real MCP tool outputs
-                message = item["messages"]
-                item['messages'] = message + [
-                    {
-                        "role": "assistant",
-                        "content": f"[ERROR: Agent failed ({agent_error})]"
-                    }
-                ]
-                return item, item_index, False, f"Agent failed: {agent_error}"
-        else:
-            # No agent specified — use direct API (non-agent mode)
-            message = item["messages"]
-            # remove the system prompt if it exists
-            if message[0]['role'] == 'system':
-                message = message[1:]
-            # If multiple user messages, take the last user
-            user_messages = [msg for msg in message if msg.get('role') == 'user']
-            if user_messages:
-                user_content = user_messages[-1]['content']
-            else:
-                raise ValueError("No user messages found")
+def normalize_messages_for_completion(messages):
+    if not messages:
+        raise ValueError("No messages found")
 
-            # Replace the last user message with the new user content
-            if message[-1]['role'] == 'user':
-                input_messages = message[:-1] + [{"role": "user", "content": user_content}]
-            else:
-                raise ValueError("Last message is not a user message?")
+    input_messages = messages
+    if input_messages[0].get("role") == "system":
+        input_messages = input_messages[1:]
 
-            try:
-                print(f"🔄 Using direct API for item {prompt_id}...")
-                api_response = make_api_request_with_retry(
-                    input_messages,
-                    API_PARAMS,
-                    API_ENDPOINT,
-                    API_HEADERS,
-                )
+    user_messages = [msg for msg in input_messages if msg.get("role") == "user"]
+    if not user_messages:
+        raise ValueError("No user messages found")
 
-                if api_response is not None:
-                    response = api_response.strip()
-                    item['messages'] = input_messages + [
-                        {
-                            "role": "assistant",
-                            "content": response
-                        }
-                    ]
-                    return item, item_index, True, f"Direct API used (no agent)"
-                else:
-                    # API returned None - treat as failure
-                    raise Exception("API request returned None after all retries")
+    latest_user_content = user_messages[-1]["content"]
+    if input_messages[-1].get("role") != "user":
+        raise ValueError("Last message is not a user message")
 
-            except Exception as e2:
-                print(f"❌ Direct API failed for item {prompt_id}: {str(e2)}")
-                item['messages'] = input_messages + [
-                    {
-                        "role": "assistant",
-                        "content": f"[ERROR: Agent failed ({agent_error}), API failed ({str(e2)})]"
-                    }
-                ]
-                return item, item_index, False, f"Both failed: {str(e2)}"
-                
-    def process_items_dynamically(self, items_to_process, processed_dataset, checkpoint_file, progress_bar):
-        """
-        Process items dynamically with individual timeouts and immediate checkpointing.
-        Only saves completed items to checkpoint for proper resume functionality.
-        """
-        completed_items = {}
-        
-        # Prepare items with metadata for processing
-        items_with_metadata = []
-        for i, (item, original_index) in enumerate(items_to_process):
-            api_key, profile = get_api_key_for_worker(i)
-            items_with_metadata.append((item, original_index, api_key, profile))
-        
-        # Process items with ThreadPoolExecutor
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all items
-            future_to_data = {}
-            for item_data in items_with_metadata:
-                future = executor.submit(self.process_single_item_with_fallback, item_data)
-                future_to_data[future] = item_data
-            
-            # Process completions as they arrive
-            for future in concurrent.futures.as_completed(future_to_data):
-                try:
-                    processed_item, original_index, success, error_msg = future.result()
-                    completed_items[original_index] = processed_item
-                    
-                    # Update the main dataset immediately
-                    processed_dataset[original_index] = processed_item
-                    
-                    # Update progress and handle checkpoint saving atomically
-                    with self.lock:
-                        # Add to completed items list for checkpoint (thread-safe)
-                        self.completed_items_list.append(processed_item)
-                        
-                        self.processed_count += 1
-                        progress_bar.update(1)
-                        
-                        # Log completion status
-                        prompt_id = processed_item.get('metadata', {}).get('prompt_id', f'item_{original_index}')
-                        status = "✅" if success else "❌"
-                        if error_msg:
-                            print(f"{status} Completed item {prompt_id} (index {original_index}) - {error_msg}")
-                        else:
-                            print(f"{status} Completed item {prompt_id} (index {original_index})")
-                        
-                        # Save checkpoint periodically - ONLY completed items
-                        if self.processed_count % self.checkpoint_every == 0:
-                            self._save_checkpoint_safely(checkpoint_file)
-                
-                except Exception as e:
-                    item_data = future_to_data[future]
-                    original_item, original_index, _, _ = item_data
-                    prompt_id = original_item.get('metadata', {}).get('prompt_id', f'item_{original_index}')
-                    print(f"❌ Unexpected error processing item {prompt_id}: {str(e)}")
-                    
-                    # Create error item
-                    message = original_item["messages"]
-                    original_item['messages'] = message + [
-                        {
-                            "role": "assistant",
-                            "content": f"[UNEXPECTED_ERROR: {str(e)}]"
-                        }
-                    ]
-                    processed_dataset[original_index] = original_item
-                    
-                    with self.lock:
-                        self.completed_items_list.append(original_item)
-                        self.processed_count += 1
-                        progress_bar.update(1)
-        
-        # Final checkpoint save for any remaining completed items
-        with self.lock:
-            if self.completed_items_list:
-                self._save_checkpoint_safely(checkpoint_file, is_final=True)
-        
-        return len(completed_items)
-    
-    def _save_checkpoint_safely(self, checkpoint_file, is_final=False):
-        """
-        Thread-safe checkpoint saving method.
-        Must be called within self.lock context.
-        """
+    return input_messages[:-1] + [{"role": "user", "content": latest_user_content}]
+
+
+async def request_completion_async(messages, client):
+    payload = {
+        "model": args.model_path,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "messages": messages,
+    }
+    extra_body = {
+        "parallel_tool_calls": args.parallel_function_calls,
+        "reasoning": {"effort": args.reasoning_effort},
+    }
+    if args.max_tokens is not None and args.max_tokens > 0:
+        payload["max_tokens"] = args.max_tokens
+    if extra_body:
+        payload["extra_body"] = extra_body
+
+    for attempt in range(args.max_retries):
         try:
-            # Load existing checkpoint and append new completions
-            existing_completed = []
-            if os.path.exists(checkpoint_file):
-                try:
-                    existing_completed = load_dataset_from_file(checkpoint_file)
-                    if not isinstance(existing_completed, list):
-                        existing_completed = [existing_completed]
-                except Exception as e:
-                    print(f"⚠️ Warning: Could not load existing checkpoint: {e}")
-                    existing_completed = []
-            
-            # Create combined list and sort by row_id
-            all_completed = existing_completed + self.completed_items_list
-            all_completed_sorted = sort_dataset_by_row_id(all_completed)
-            
-            # Save checkpoint safely
-            safe_save_checkpoint(all_completed_sorted, checkpoint_file, convert_to_jsonl=False)
-            
-            checkpoint_type = "Final" if is_final else "Periodic"
-            print(f"💾 {checkpoint_type} checkpoint saved: {len(all_completed_sorted)} completed items total (sorted by row_id)")
-            
-            # Clear the completed items list since they're now saved
-            self.completed_items_list = []
-            
+            completion = await client.chat.completions.create(**payload)
+            return extract_message_text(completion.choices[0].message.content).strip()
         except Exception as e:
-            print(f"❌ Error saving checkpoint: {e}")
-            # Don't clear the list if save failed - we'll try again next time
+            print(f"Request attempt {attempt + 1} failed: {e}")
+            await asyncio.sleep(2 ** attempt)
+
+    return ""
+
+
+async def process_single_item_direct_async(item, client):
+    prompt_id = item.get("metadata", {}).get("prompt_id", "unknown")
+    input_messages = normalize_messages_for_completion(item["messages"])
+
+    print(f"🔄 Using direct API for item {prompt_id}...")
+    response = await request_completion_async(input_messages, client)
+    if response is None:
+        response = ""
+
+    item["messages"] = input_messages + [{"role": "assistant", "content": response}]
+    return item
 
 # Function to sort dataset by row_id from metadata
 def sort_dataset_by_row_id(dataset):
@@ -1145,13 +928,83 @@ def add_generation_config_to_metadata(dataset, model_short_name, generation_para
     
     return dataset
 
-# Generate outputs using dynamic processing with timeout resilience
-def generate_and_update(dataset, checkpoint_file):
-    processed_dataset = copy.deepcopy(dataset)
+def checkpoint_file_path(index, checkpoint_dir):
+    return os.path.join(checkpoint_dir, f"{index:08d}.json")
 
-    # Prepare generation parameters for metadata
-    generation_params = {
-        "engine": args.engine,
+
+def save_item_checkpoint(index, item, checkpoint_dir):
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_path = checkpoint_file_path(index, checkpoint_dir)
+    temp_path = f"{checkpoint_path}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(item, f, ensure_ascii=False)
+        f.write("\n")
+    os.replace(temp_path, checkpoint_path)
+
+
+def load_item_checkpoints(processed_dataset, checkpoint_dir):
+    completed_indices = set()
+    if not os.path.isdir(checkpoint_dir):
+        return completed_indices
+
+    for file_name in os.listdir(checkpoint_dir):
+        match = re.fullmatch(r"(\d+)\.json", file_name)
+        if match is None:
+            continue
+
+        index = int(match.group(1))
+        if index < 0 or index >= len(processed_dataset):
+            continue
+
+        file_path = os.path.join(checkpoint_dir, file_name)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                processed_dataset[index] = json.load(f)
+            completed_indices.add(index)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"Failed to load checkpoint {file_path}: {e}. Reprocessing index {index}.")
+
+    return completed_indices
+
+
+def get_input_base_name(input_file):
+    base_name = input_file[: input_file.rfind(".")]
+    if base_name.endswith("_4prepared"):
+        return base_name[:-10]
+    if base_name.endswith("_prepared"):
+        return base_name[:-9]
+    return base_name
+
+
+def resolve_processing_range(total_rows):
+    if total_rows <= 0:
+        raise ValueError(f"Input dataset is empty: {args.input_file}")
+    if args.start_idx >= total_rows:
+        raise ValueError(
+            f"--start_idx ({args.start_idx}) must be smaller than dataset size ({total_rows})."
+        )
+
+    start_idx = args.start_idx
+    requested_end_idx = total_rows if args.batch_size is None else args.start_idx + args.batch_size
+    end_idx = min(requested_end_idx, total_rows)
+    return start_idx, requested_end_idx, end_idx
+
+
+def build_output_paths(base_name, start_idx, end_idx, trial_idx=None):
+    trial_suffix = f"{trial_idx}" if trial_idx is not None else ""
+    range_mode = args.batch_size is not None or args.start_idx != 0
+    if range_mode:
+        saved_file = f"{base_name}_{config_str}_results{trial_suffix}_{start_idx}_{end_idx}.jsonl"
+        checkpoint_dir = f"{base_name}_{config_str}_results{trial_suffix}_checkpoints_{start_idx}_{end_idx}"
+    else:
+        saved_file = f"{base_name}_{config_str}_results{trial_suffix}.jsonl"
+        checkpoint_dir = f"{base_name}_{config_str}_results{trial_suffix}_checkpoints"
+    return saved_file, checkpoint_dir
+
+
+def build_generation_params(max_workers):
+    return {
+        "base_url": args.base_url,
         "model_path": args.model_path,
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,
@@ -1160,202 +1013,146 @@ def generate_and_update(dataset, checkpoint_file):
         "step": args.step,
         "agent": args.agent,
         "timeout": args.timeout,
-        "max_workers": args.max_workers
+        "max_workers": max_workers,
+        "parallel_function_calls": args.parallel_function_calls,
+        "reasoning_effort": args.reasoning_effort,
     }
 
-    # Determine which items need processing by comparing IDs/metadata
-    items_to_process = []
-    completed_item_ids = set()
-    completed_count = 0
-    
-    if os.path.exists(checkpoint_file):
+
+def build_error_item(item, error_text):
+    fallback_item = copy.deepcopy(item)
+    original_messages = fallback_item.get("messages", [])
+    fallback_item["messages"] = original_messages + [
+        {"role": "assistant", "content": f"[ERROR: {error_text}]"}
+    ]
+    return fallback_item
+
+
+async def process_index_async(index, processed_dataset, direct_client, semaphore):
+    async with semaphore:
+        api_key, profile = get_api_key_for_worker(index)
+        current_item = copy.deepcopy(processed_dataset[index])
+        prompt_id = current_item.get("metadata", {}).get("prompt_id", f"item_{index}")
+
         try:
-            checkpoint_data = load_dataset_from_file(checkpoint_file)
-            if not isinstance(checkpoint_data, list):
-                checkpoint_data = [checkpoint_data]
-            
-            print(f"Checkpoint file found with {len(checkpoint_data)} completed items.")
-            
-            # Extract completed item IDs from checkpoint
-            for completed_item in checkpoint_data:
-                # Use prompt_id from metadata if available, otherwise use a hash of the input
-                metadata = completed_item.get('metadata', {})
-                prompt_id = metadata.get('prompt_id')
-                
-                if prompt_id:
-                    completed_item_ids.add(prompt_id)
-                else:
-                    # Fallback: use hash of the user message for identification
-                    messages = completed_item.get('messages', [])
-                    if messages:
-                        user_msg = next((msg['content'] for msg in messages if msg.get('role') == 'user'), '')
-                        if user_msg:
-                            completed_item_ids.add(hash(user_msg))
-            
-            completed_count = len(checkpoint_data)
-            
-            # Update processed_dataset with completed items for those positions we can identify
-            # This maintains compatibility with the old approach while being more robust
-            checkpoint_index = 0
-            for i, item in enumerate(processed_dataset):
-                metadata = item.get('metadata', {})
-                prompt_id = metadata.get('prompt_id')
-                
-                # Check if this item is completed
-                is_completed = False
-                if prompt_id and prompt_id in completed_item_ids:
-                    is_completed = True
-                else:
-                    # Fallback check using message hash
-                    messages = item.get('messages', [])
-                    if messages:
-                        user_msg = next((msg['content'] for msg in messages if msg.get('role') == 'user'), '')
-                        if user_msg and hash(user_msg) in completed_item_ids:
-                            is_completed = True
-                
-                if is_completed and checkpoint_index < len(checkpoint_data):
-                    # Replace with completed version from checkpoint
-                    processed_dataset[i] = checkpoint_data[checkpoint_index]
-                    checkpoint_index += 1
-                else:
-                    # This item needs processing
-                    items_to_process.append((item, i))
-            
+            if args.agent:
+                processed_item = await asyncio.wait_for(
+                    process_single_item_agent_async(current_item, api_key, profile),
+                    timeout=args.timeout,
+                )
+            else:
+                processed_item = await asyncio.wait_for(
+                    process_single_item_direct_async(current_item, direct_client),
+                    timeout=args.timeout,
+                )
+            print(f"✅ Completed item {prompt_id} (index {index})")
+            return index, processed_item
         except Exception as e:
-            print(f"Error loading checkpoint: {e}")
-            print("Starting fresh...")
-            completed_count = 0
-            # Process all items if checkpoint is corrupted
-            for i in range(len(processed_dataset)):
-                items_to_process.append((processed_dataset[i], i))
-    else:
-        print("No checkpoint found. Processing all items.")
-        # Process all items
-        for i in range(len(processed_dataset)):
-            items_to_process.append((processed_dataset[i], i))
-    
-    print(f"Total items in dataset: {len(processed_dataset)}")
-    print(f"Already completed: {completed_count}")
-    print(f"Remaining to process: {len(items_to_process)}")
-    
-    if len(items_to_process) == 0:
-        print("All items already processed!")
-        return processed_dataset
+            if isinstance(e, asyncio.TimeoutError):
+                error_text = f"Timed out after {args.timeout}s"
+            else:
+                error_text = str(e)
+            print(f"❌ Failed item {prompt_id} (index {index}): {error_text}")
+            return index, build_error_item(current_item, error_text)
 
-    # Create dynamic processor
-    max_workers = args.max_workers or (len(smithery_api_pool) if smithery_api_pool else 8)
-    processor = DynamicProcessor(
-        max_workers=max_workers, 
-        checkpoint_every=CHECKPOINT_EVERY
-    )
-    
-    print(f"🚀 Starting dynamic processing with {max_workers} workers...")
-    print(f"💾 Checkpoints will be saved every {CHECKPOINT_EVERY} completed items")
-    print(f"⏱️ Individual item timeout: {args.timeout} seconds")
-    
-    # Create progress bar for remaining items
-    with tqdm(total=len(items_to_process), 
-              desc="Processing items", 
-              unit="item",
-              initial=0,
-              leave=True, 
-              dynamic_ncols=True,
-              bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]") as progress_bar:
-        
-        start_time = time()
-        
-        # Process items dynamically (will use agent if available, otherwise direct API)
-        completed_count = processor.process_items_dynamically(
-            items_to_process, 
-            processed_dataset, 
-            checkpoint_file, 
-            progress_bar
+
+async def generate_and_update(dataset, direct_client, checkpoint_dir):
+    processed_dataset = copy.deepcopy(dataset)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    completed_indices = load_item_checkpoints(processed_dataset, checkpoint_dir)
+    if completed_indices:
+        print(
+            f"Loaded {len(completed_indices)} completed item checkpoints from {checkpoint_dir}."
         )
-        
-        end_time = time()
-        
-        print(f"\n🎉 Dynamic processing completed!")
-        print(f"📊 Items processed: {completed_count}/{len(items_to_process)}")
-        print(f"⏱️ Total time: {end_time - start_time:.2f} seconds")
-        print(f"⚡ Average time per item: {(end_time - start_time)/max(completed_count, 1):.2f} seconds")
 
-    # Add generation config to metadata and sort by row_id before returning
-    processed_dataset = add_generation_config_to_metadata(processed_dataset, model_abbreviation, generation_params)
-    processed_dataset_sorted = sort_dataset_by_row_id(processed_dataset)
-    
-    return processed_dataset_sorted
+    pending_indices = [idx for idx in range(len(processed_dataset)) if idx not in completed_indices]
+    max_workers = args.max_workers or (len(smithery_api_pool) if smithery_api_pool else 8)
 
-# Main function to control workflow
-def main():
-    # Load and validate Smithery API pool
+    if not pending_indices:
+        print("No remaining items to process.")
+    else:
+        print(f"Processing {len(pending_indices)} items with max concurrency {max_workers}.")
+        semaphore = asyncio.Semaphore(max_workers)
+        tasks = [
+            asyncio.create_task(process_index_async(idx, processed_dataset, direct_client, semaphore))
+            for idx in pending_indices
+        ]
+
+        for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Generating completions"):
+            index, processed_item = await task
+            processed_dataset[index] = processed_item
+            save_item_checkpoint(index, processed_item, checkpoint_dir)
+
+    generation_params = build_generation_params(max_workers)
+    processed_dataset = add_generation_config_to_metadata(
+        processed_dataset,
+        model_abbreviation,
+        generation_params,
+    )
+    return sort_dataset_by_row_id(processed_dataset)
+
+
+async def run_trial(target_dataset, saved_file, checkpoint_dir):
+    direct_client = AsyncOpenAI(base_url=args.base_url, api_key=args.api_key)
+    try:
+        updated_dataset = await generate_and_update(target_dataset, direct_client, checkpoint_dir)
+        save_dataset(updated_dataset, saved_file, convert_to_jsonl=True)
+        if os.path.isdir(checkpoint_dir):
+            shutil.rmtree(checkpoint_dir)
+        print(f"Final dataset saved to {saved_file}.")
+    finally:
+        await direct_client.close()
+
+
+async def main():
+    if args.num_trials <= 0:
+        raise ValueError("--num_trials must be a positive integer.")
+
     api_pool = load_and_validate_smithery_api_pool(args.smithery_api_pool)
-    
-    # Display dynamic processing info
     pool_size = len(api_pool) if api_pool else 0
     effective_workers = args.max_workers or (pool_size if pool_size > 0 else 8)
+
     print("=" * 50)
-    print("🚀 DYNAMIC PROCESSING CONFIGURATION")
+    print("🚀 ASYNC PROCESSING CONFIGURATION")
     print("=" * 50)
-    print(f"Processing mode: Dynamic (individual item processing)")
     print(f"Workers: {effective_workers}")
-    print(f"API pool size: {len(api_pool)}")
+    print(f"API pool size: {pool_size}")
     print(f"Timeout per item: {args.timeout} seconds")
-    print(f"Checkpoint frequency: Every {args.checkpoint_every} completed items")
-    
-    if args.max_workers is not None:
-        print(f"Worker setting: Custom ({args.max_workers} workers)")
-    else:
-        print(f"Worker setting: Auto-detected from API pool size")
-    
-    print(f"Resilience: Individual timeouts prevent blocking")
-    if args.agent:
-        print(f"Processing: Agent mode with direct API fallback")
-    else:
-        print(f"Processing: Direct API mode (no agent)")
-    print(f"Checkpoint format: Only completed items (compatible with old format)")
-    print(f"Sorting: All outputs sorted by row_id from metadata")
+    print(f"Checkpointing: One JSON file per completed item")
+    print(f"Endpoint: {args.base_url}")
+    print(f"Mode: {'Agent' if args.agent else 'Direct API'}")
     print("=" * 50)
-    
-    try:
-        # Load instructions from the input file
-        dataset = load_dataset_from_file(INPUT_FILE_NAME)
-        
-        # Ensure dataset is always a list (fix for single-item JSON files)
-        if not isinstance(dataset, list):
-            dataset = [dataset]
 
-        if args.num_trials == 1:
-            updated_dataset = generate_and_update(dataset, checkpoint_file)
-            save_dataset(updated_dataset, saved_file, convert_to_jsonl=True)
+    dataset = load_dataset_from_file(INPUT_FILE_NAME)
+    if not isinstance(dataset, list):
+        dataset = [dataset]
 
-            # Optionally remove the checkpoint file after completion
-            if os.path.exists(checkpoint_file):
-                os.remove(checkpoint_file)
-            print("Final dataset saved. Checkpoint removed.")
-        else:
-            for i in range(args.num_trials):
-                updated_dataset = generate_and_update(dataset, checkpoint_files[i])
-                save_dataset(updated_dataset, saved_files[i], convert_to_jsonl=True)
+    total_rows = len(dataset)
+    start_idx, requested_end_idx, end_idx = resolve_processing_range(total_rows)
+    target_dataset = dataset[start_idx:end_idx]
 
-                # Optionally remove the checkpoint file after completion
-                if os.path.exists(checkpoint_files[i]):
-                    os.remove(checkpoint_files[i])
-                print(f"Dataset for trial {i} saved. Checkpoint {i} removed.")
-    
-    finally:
-        # Clean up MCP resources to ensure proper program exit
-        if args.agent:
-            try:
-                print("🧹 Cleaning up MCP resources...")
-                # OpenAI Agent framework handles cleanup automatically via context managers
-                print("✅ MCP cleanup completed.")
-            except Exception as e:
-                print(f"⚠️ Warning: MCP cleanup failed: {e}")
-        
-        print("🎯 Program execution completed.")
-        os._exit(0)  # Use os._exit to avoid atexit conflicts with multiprocessing
+    base_name = get_input_base_name(args.input_file)
+    print(
+        f"Dataset rows: {total_rows}. Requested range: "
+        f"[{start_idx}, {requested_end_idx}). Effective range: [{start_idx}, {end_idx})."
+    )
+    print(f"Processing {len(target_dataset)} rows.")
+
+    if args.num_trials == 1:
+        saved_file, checkpoint_dir = build_output_paths(base_name, start_idx, end_idx)
+        print(f"Output file: {saved_file}")
+        print(f"Checkpoint dir: {checkpoint_dir}")
+        await run_trial(target_dataset, saved_file, checkpoint_dir)
+    else:
+        for trial_idx in range(args.num_trials):
+            saved_file, checkpoint_dir = build_output_paths(base_name, start_idx, end_idx, trial_idx=trial_idx)
+            print(f"Trial {trial_idx}: output={saved_file}")
+            print(f"Trial {trial_idx}: checkpoints={checkpoint_dir}")
+            await run_trial(target_dataset, saved_file, checkpoint_dir)
+
+    print("🎯 Program execution completed.")
 
 
-# Run the main function
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

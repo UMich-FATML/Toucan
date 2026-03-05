@@ -1,14 +1,14 @@
 #!/bin/zsh
-#SBATCH --job-name=step1.2-onet-array
+#SBATCH --job-name=step3.21-onet-array
 #SBATCH --reservation=moe
 #SBATCH --qos=lowprio
 #SBATCH --partition=lowprio
 #SBATCH --gres=gpu:8
 #SBATCH --cpus-per-task=96
 #SBATCH --time=7-00:00:00
-#SBATCH --array=0-121%200
-#SBATCH --output=../logs/slurm/step1.2-onet-array-%A_%a.out
-#SBATCH --error=../logs/slurm/step1.2-onet-array-%A_%a.err
+#SBATCH --array=0-9%200
+#SBATCH --output=../logs/slurm/step3.21-onet-array-%A_%a.out
+#SBATCH --error=../logs/slurm/step3.21-onet-array-%A_%a.err
 
 set -euo pipefail
 
@@ -18,19 +18,16 @@ mkdir -p ../logs/slurm
 # -----------------------------
 # User config (edit these)
 # -----------------------------
-INPUT_FILE="../data/self_contained_two_onet_task_q_no_refs/onet_tasks_2_tasks_all_1772474997_prepared.jsonl"
+INPUT_FILE="../data/self_contained_two_onet_task_q_no_refs/processed/onet_tasks_2_tasks_all_1772474997_Kimi-K2-Thinking_validated_prepared.jsonl"
 BATCH_SIZE="1000"
 
 MODEL_NAME="Kimi-K2-Thinking"
-STEP_TAG="1.2_onet"
-OUTPUT_SCHEMA_FILE="./prompts/genq_from_onet_tasks_output_schema.json"
-
-# Forwarded as positional args ($7+) to step1.2_onet_completion.sh.
-# Example: VLLM_EXTRA_ARGS=(--port 8001 --max-model-len 32768)
-VLLM_EXTRA_ARGS=()
+BASE_URL="http://localhost:8000/v1"
+API_KEY="EMPTY"
+MCP_SERVER_DIR="../mcp_servers/smithery_mcp_servers_0210"
 
 # Submit with:
-#   sbatch step1.2_onet_completion_array.sbatch
+#   sbatch step3.21_completion_agent_virtual_array.sbatch
 
 if [[ -z "$INPUT_FILE" ]]; then
     echo "Error: INPUT_FILE is empty. Set INPUT_FILE in this script." >&2
@@ -44,11 +41,6 @@ fi
 
 if ! [[ "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
     echo "Error: BATCH_SIZE must be a positive integer." >&2
-    exit 1
-fi
-
-if [[ ! -f "$OUTPUT_SCHEMA_FILE" ]]; then
-    echo "Error: OUTPUT_SCHEMA_FILE not found: $OUTPUT_SCHEMA_FILE" >&2
     exit 1
 fi
 
@@ -86,15 +78,16 @@ fi
 
 start_idx=$(( task_id * BATCH_SIZE ))
 
-echo "[step1.2_onet_array] input_file=${INPUT_FILE}"
-echo "[step1.2_onet_array] total_rows=${total_rows}, batch_size=${BATCH_SIZE}, num_tasks=${num_tasks}"
-echo "[step1.2_onet_array] task_id=${task_id}, start_idx=${start_idx}"
+echo "[step3.21_virtual_array] input_file=${INPUT_FILE}"
+echo "[step3.21_virtual_array] total_rows=${total_rows}, batch_size=${BATCH_SIZE}, num_tasks=${num_tasks}"
+echo "[step3.21_virtual_array] task_id=${task_id}, start_idx=${start_idx}"
+echo "[step3.21_virtual_array] model=${MODEL_NAME}, base_url=${BASE_URL}"
 
-bash step1.2_onet_completion.sh \
+bash step3.21_completion_agent_virtual.sh \
     "$INPUT_FILE" \
     "$start_idx" \
     "$BATCH_SIZE" \
     "$MODEL_NAME" \
-    "$STEP_TAG" \
-    "$OUTPUT_SCHEMA_FILE" \
-    "${VLLM_EXTRA_ARGS[@]}"
+    "$BASE_URL" \
+    "$API_KEY" \
+    "$MCP_SERVER_DIR"

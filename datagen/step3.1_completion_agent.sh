@@ -115,10 +115,22 @@ if [ "$engine" == "vllm_api" ]; then
     fi
 fi
 
+if [ "$engine" == "vllm_api" ]; then
+    base_url=${BASE_URL:-"http://localhost:8000/v1"}
+    api_key=${API_KEY:-"EMPTY"}
+elif [ "$engine" == "openrouter_api" ]; then
+    base_url=${OPENROUTER_URL:-"https://openrouter.ai/api/v1"}
+    api_key=${OPENROUTER_API_KEY:-"EMPTY"}
+else
+    echo -e "${RED}Error: Unsupported engine '${engine}'. Use 'vllm_api' or 'openrouter_api'.${NC}"
+    exit 1
+fi
+
 echo -e "${BLUE}[Step 3.1] Agent Evaluation${NC}"
 echo -e "  Input:      ${input_file}"
 echo -e "  Model:      ${model_path}"
 echo -e "  Engine:     ${engine}"
+echo -e "  Endpoint:   ${base_url}"
 echo -e "  Agent:      ${agent}"
 echo -e "  Timeout:    ${timeout}s"
 echo -e "  Max turns:  ${max_turns}"
@@ -127,7 +139,8 @@ echo -e "  Workers:    ${max_workers}"
 python completion_openai_agent.py \
     --input_file "${input_file}" \
     --model_path "${model_path}" \
-    --engine "${engine}" \
+    --base_url "${base_url}" \
+    --api_key "${api_key}" \
     --step "${step}" \
     --agent "${agent}" \
     --smithery_api_pool "${smithery_api_pool}" \

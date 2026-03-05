@@ -57,14 +57,27 @@ if [ "$engine" == "vllm_api" ]; then
     fi
 fi
 
+if [ "$engine" == "vllm_api" ]; then
+    base_url=${BASE_URL:-"http://localhost:8000/v1"}
+    api_key=${API_KEY:-"EMPTY"}
+elif [ "$engine" == "openrouter_api" ]; then
+    base_url=${OPENROUTER_URL:-"https://openrouter.ai/api/v1"}
+    api_key=${OPENROUTER_API_KEY:-"EMPTY"}
+else
+    echo "Error: Unsupported engine '${engine}'. Use 'vllm_api' or 'openrouter_api'."
+    exit 1
+fi
+
 echo -e "${YELLOW}[step1.2_agent] Using OpenAI Agent framework with REAL MCP servers${NC}"
 echo -e "${YELLOW}[step1.2_agent] The model will execute tools during generation to validate them${NC}"
+echo -e "${YELLOW}[step1.2_agent] Endpoint: ${base_url}${NC}"
 
 # Use completion_openai_agent.py with REAL MCP servers (NOT virtual tools)
 python completion_openai_agent.py \
     --input_file "${input_file}" \
     --model_path "${model_path}" \
-    --engine "${engine}" \
+    --base_url "${base_url}" \
+    --api_key "${api_key}" \
     --step "${step}" \
     --agent "openai_agent" \
     --timeout 900 \
