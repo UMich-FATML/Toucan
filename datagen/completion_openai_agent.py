@@ -11,6 +11,7 @@ import base64
 import signal
 import atexit
 import shutil
+from glob import glob
 from time import time
 from tqdm import tqdm
 from virtual_tools import VirtualToolBackend, create_dynamic_virtual_tool
@@ -137,6 +138,12 @@ config_str = f"{model_abbreviation}_{args.reasoning_effort}_pfc" if args.paralle
 # Global API pool variable
 smithery_api_pool = None
 
+# Row-id keyed map of full question-generation conversation histories.
+# Populated once from parent-dir *_results.jsonl, matched via *_3sanitized.jsonl row_ids.
+QUESTION_GEN_HISTORY_BY_ROW_ID = {}
+QUESTION_GEN_HISTORY_SOURCE_FILE = None
+QUESTION_GEN_HISTORY_READY = False
+
 def load_and_validate_smithery_api_pool(pool_file_path):
     """
     Load Smithery API pool from JSON file.
@@ -245,6 +252,181 @@ def construct_mcp_server_url(server_info, api_key=None, profile=None):
         server_url += f"&profile={profile}"
     
     return server_url
+
+
+def normalize_row_id_key(row_id):
+    """Normalize row_id to a stable string key for joins."""
+    if row_id is None:
+        return None
+    try:
+        return str(int(row_id))
+    except (ValueError, TypeError):
+        return str(row_id)
+
+
+def resolve_sanitized_file(prepared_input_file):
+    """
+    Resolve the sibling *_3sanitized.jsonl corresponding to a prepared input file.
+    Falls back to a deterministic match in the same output directory.
+    """
+    output_dir = os.path.dirname(prepared_input_file) or "."
+    input_basename = os.path.basename(prepared_input_file)
+    stem, _ = os.path.splitext(input_basename)
+
+    if stem.endswith("_4prepared"):
+        base_stem = stem[:-10]
+    elif stem.endswith("_prepared"):
+        base_stem = stem[:-9]
+    else:
+        base_stem = stem
+
+    exact_candidate = os.path.join(output_dir, f"{base_stem}_3sanitized.jsonl")
+    if os.path.exists(exact_candidate):
+        return exact_candidate
+
+    prefixed = sorted(glob(os.path.join(output_dir, f"{base_stem}*_3sanitized.jsonl")))
+    if prefixed:
+        return prefixed[0]
+
+    any_sanitized = sorted(glob(os.path.join(output_dir, "*_3sanitized.jsonl")))
+    if any_sanitized:
+        return any_sanitized[0]
+
+    return None
+
+
+def load_sanitized_row_id_keys(sanitized_file):
+    """Load row_id keys from *_3sanitized.jsonl."""
+    row_id_keys = set()
+    if not sanitized_file or not os.path.exists(sanitized_file):
+        return row_id_keys
+
+    with open(sanitized_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            key = normalize_row_id_key((item.get("metadata") or {}).get("row_id"))
+            if key is not None:
+                row_id_keys.add(key)
+    return row_id_keys
+
+
+def count_results_row_id_overlap(results_file, row_id_keys):
+    """Count row_id overlap between a *_results.jsonl file and sanitized row ids."""
+    if not row_id_keys:
+        return 0
+
+    overlap = 0
+    with open(results_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            key = normalize_row_id_key((item.get("metadata") or {}).get("row_id"))
+            if key is not None and key in row_id_keys:
+                overlap += 1
+    return overlap
+
+
+def select_results_file(parent_dir, sanitized_file, row_id_keys):
+    """
+    Select parent-dir *_results.jsonl that best matches sanitized row_ids.
+    """
+    candidates = sorted(glob(os.path.join(parent_dir, "*_results.jsonl")))
+    if not candidates:
+        return None, 0
+
+    expected_file = None
+    if sanitized_file:
+        sanitized_name = os.path.basename(sanitized_file)
+        if sanitized_name.endswith("_3sanitized.jsonl"):
+            prefix = sanitized_name[:-len("_3sanitized.jsonl")]
+            expected_path = os.path.join(parent_dir, f"{prefix}_results.jsonl")
+            if os.path.exists(expected_path):
+                expected_file = expected_path
+
+    scored = []
+    for path in candidates:
+        overlap = count_results_row_id_overlap(path, row_id_keys)
+        expected_bonus = 1 if expected_file and path == expected_file else 0
+        scored.append((overlap, expected_bonus, path))
+
+    scored.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+    best_overlap, _, best_file = scored[0]
+    return best_file, best_overlap
+
+
+def load_question_generation_history_by_row_id(prepared_input_file):
+    """
+    Load row_id -> full messages map using:
+      - row ids from sibling *_3sanitized.jsonl
+      - full histories from parent-dir *_results.jsonl
+    """
+    output_dir = os.path.dirname(prepared_input_file) or "."
+    parent_dir = os.path.dirname(output_dir) or "."
+
+    sanitized_file = resolve_sanitized_file(prepared_input_file)
+    if not sanitized_file:
+        print("⚠️ Could not find *_3sanitized.jsonl near input; question-gen history lookup disabled.")
+        return {}, None
+
+    row_id_keys = load_sanitized_row_id_keys(sanitized_file)
+    if not row_id_keys:
+        print(f"⚠️ No row_id values found in sanitized file: {sanitized_file}")
+        return {}, None
+
+    results_file, overlap = select_results_file(parent_dir, sanitized_file, row_id_keys)
+    if not results_file:
+        print(f"⚠️ No parent-dir *_results.jsonl found in: {parent_dir}")
+        return {}, None
+
+    history_by_row_id = {}
+    with open(results_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            key = normalize_row_id_key((item.get("metadata") or {}).get("row_id"))
+            if key is None or key not in row_id_keys:
+                continue
+
+            messages = item.get("messages")
+            if isinstance(messages, list):
+                history_by_row_id[key] = messages
+
+    print("🧭 Question-generation history lookup:")
+    print(f"   - Sanitized file: {sanitized_file}")
+    print(f"   - Parent results file: {results_file}")
+    print(f"   - Sanitized row_ids: {len(row_id_keys)}")
+    print(f"   - Row-id overlap: {overlap}")
+    print(f"   - Loaded histories: {len(history_by_row_id)}")
+    return history_by_row_id, results_file
+
+
+def ensure_question_generation_history_loaded():
+    """Initialize row_id->messages history cache once per run."""
+    global QUESTION_GEN_HISTORY_BY_ROW_ID, QUESTION_GEN_HISTORY_SOURCE_FILE, QUESTION_GEN_HISTORY_READY
+    if QUESTION_GEN_HISTORY_READY:
+        return
+
+    QUESTION_GEN_HISTORY_BY_ROW_ID, QUESTION_GEN_HISTORY_SOURCE_FILE = (
+        load_question_generation_history_by_row_id(args.input_file)
+    )
+    QUESTION_GEN_HISTORY_READY = True
 
 def convert_openai_agent_result_to_messages(result, original_messages, system_prompt=None):
     """Convert OpenAI Agent result to message format compatible with Qwen Agent structure"""
@@ -480,10 +662,34 @@ def create_agent_for_item(item, api_key=None, profile=None):
     # --- MODE 1: VIRTUAL TOOLS (Hallucinated) ---
     # You will need to add --virtual_tools to your args parser
     if hasattr(args, 'virtual_tools') and args.virtual_tools:
-        
+        ensure_question_generation_history_loaded()
+
         print(f"👻 Configuring Agent with VIRTUAL tools (Agent: {args.model_path}, VirtualTool: {args.model_path})...")
         virtual_backend = VirtualToolBackend(client, model_path=args.model_path)
         virtual_tool_funcs = []
+
+        # Keep scenario context used by virtual tool simulation.
+        question = metadata.get('question', '')
+        tool_analysis = metadata.get('tool_analysis', '')
+        workflow_analysis = metadata.get('cross_tool_workflow', '')
+
+        target_tools = metadata.get('target_tools', [])
+        expected_outputs_by_tool = {}
+        for tt in (target_tools or []):
+            if isinstance(tt, dict):
+                tool_key = tt.get('tool', '')
+                if tool_key:
+                    expected_outputs_by_tool[tool_key] = tt.get('output', '')
+
+        row_id_key = normalize_row_id_key(metadata.get('row_id'))
+        matched_history = QUESTION_GEN_HISTORY_BY_ROW_ID.get(row_id_key) if row_id_key is not None else None
+        if not isinstance(matched_history, list) or not matched_history:
+            matched_history = item.get("messages", [])
+        if not isinstance(matched_history, list) or not matched_history:
+            matched_history = [{"role": "user", "content": question}] if question else []
+        # Shared, per-item transcript of prior simulated tool calls.
+        # Every virtual tool receives this same list for scenario continuity.
+        tool_simulation_messages = []
 
         for server_info in mcp_servers:
             # Start with inline fields from the input file
@@ -511,7 +717,24 @@ def create_agent_for_item(item, api_key=None, profile=None):
                     An analysis of this server is as follows: {server_analysis}.
                     
                     This tool has the following functionality within the MCP server: {tool_def['description']}'''
-                v_tool = create_dynamic_virtual_tool(tool_def, virtual_backend)
+                tool_raw_name = tool_def.get('name', '')
+                expected_output = expected_outputs_by_tool.get(tool_raw_name, '')
+                scenario_context = {
+                    "conversation_history": matched_history,
+                    "tool_simulation_messages": tool_simulation_messages,
+                    "question": question,
+                    "tool_analysis": tool_analysis,
+                    "workflow_analysis": workflow_analysis,
+                    "expected_output": expected_output,
+                    "server_id": server_id,
+                    "server_name": server_name,
+                    "server_description": server_analysis,
+                }
+                v_tool = create_dynamic_virtual_tool(
+                    tool_def,
+                    virtual_backend,
+                    scenario_context=scenario_context,
+                )
                 virtual_tool_funcs.append(v_tool)
 
         if not virtual_tool_funcs:
