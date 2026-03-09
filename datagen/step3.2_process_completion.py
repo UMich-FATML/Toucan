@@ -166,6 +166,40 @@ def has_empty_final_assistant_message(messages):
     
     return False
 
+def has_tool_calls_but_no_final_response(messages):
+    """
+    Check if the agent made tool calls but never generated a final text response.
+    Returns True if tool calls exist but the last assistant message has no text content.
+    """
+    if not messages or not isinstance(messages, list):
+        return False
+
+    if not has_tool_calls(messages):
+        return False
+
+    # Find the last assistant message
+    last_assistant = None
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant":
+            last_assistant = msg
+            break
+
+    if last_assistant is None:
+        return True
+
+    content = last_assistant.get("content", "")
+    has_text = content and content.strip()
+    has_calls = last_assistant.get("tool_calls") or last_assistant.get("function_call")
+
+    # No text in the final assistant message, or the final assistant message is only tool calls
+    if not has_text:
+        return True
+    # Last assistant message is a tool call with no meaningful text
+    if has_calls and not has_text:
+        return True
+
+    return False
+
 def has_exclamation_marks_in_assistant_messages(messages):
     """
     Check if any assistant messages contain multiple exclamation marks (!!!!!!!!!!!!).
@@ -222,6 +256,7 @@ def filter_completions(input_file, output_file, preview_file=None):
         "total_processed": 0,
         "valid_entries": 0,
         "valid_no_tool_calls": 0,
+        "valid_tool_calls_no_final_response": 0,
         "filtered_out": {
             "no_system_prompt": 0,
             "empty_final_assistant_message": 0,
@@ -240,8 +275,11 @@ def filter_completions(input_file, output_file, preview_file=None):
                 
                 if is_valid:
                     stats["valid_entries"] += 1
-                    if not has_tool_calls(data.get("messages", [])):
+                    msgs = data.get("messages", [])
+                    if not has_tool_calls(msgs):
                         stats["valid_no_tool_calls"] += 1
+                    if has_tool_calls_but_no_final_response(msgs):
+                        stats["valid_tool_calls_no_final_response"] += 1
 
                     # Clean unusual line terminators
                     data = clean_json_object(data)
@@ -279,6 +317,7 @@ def print_filtering_summary(stats):
     print(f"Total Entries Processed: {total}")
     print(f"Valid Entries: {valid} ({(valid/total*100):.1f}%)")
     print(f"  (of which no tool calls): {stats['valid_no_tool_calls']} ({(stats['valid_no_tool_calls']/total*100):.1f}%)")
+    print(f"  (of which tool calls but no final response): {stats['valid_tool_calls_no_final_response']} ({(stats['valid_tool_calls_no_final_response']/total*100):.1f}%)")
     print(f"Filtered Out: {filtered} ({(filtered/total*100):.1f}%)")
     
     print("\nFiltering Breakdown:")

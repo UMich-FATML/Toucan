@@ -67,8 +67,10 @@ signal.signal(signal.SIGTERM, signal_handler)
 def get_args():
     parser = argparse.ArgumentParser(description="Multi-Agent Response Generation Manager.")
     parser.add_argument("--model_path", type=str, default="openai/gpt-4o",
-                        help="Student model path for inference")
+                        help="Model path used for Student, User, and Virtual Tool simulation")
     parser.add_argument("--input_file", type=str, default=None, help="Input dataset file name")
+    parser.add_argument("--start_idx", type=int, default=0, help="Start index (inclusive) of rows to process.")
+    parser.add_argument("--batch_size", type=int, default=None, help="Optional number of rows to process from start_idx.")
     parser.add_argument("--checkpoint_every", type=int, default=16, help="Save checkpoint every n completed items")
     parser.add_argument("--openrouter_url", type=str, default="https://openrouter.ai/api/v1", help="OpenRouter API URL")
     parser.add_argument("--openrouter_api_key", type=str, default="", help="OpenRouter API Key")
@@ -97,13 +99,13 @@ def get_args():
     # Tool parameters
     parser.add_argument("--virtual_tools", action="store_true", help="Use LLM-hallucinated tools instead of real MCP connections")
     parser.add_argument("--virtual_tool_model", type=str, default="openai/gpt-4o-mini",
-                    help="Model to use for virtual tool hallucination")
+                    help="Deprecated: ignored; virtual tools use --model_path")
     parser.add_argument("--mcp_server_dir", type=str, default="../mcp_servers/smithery_mcp_servers_0210",
                     help="Path to directory of MCP server JSON files")
 
     # Multi-agent specific parameters
     parser.add_argument("--user_model", type=str, default="openai/gpt-4o",
-                    help="Model for the User agent (evaluator/guide)")
+                    help="Deprecated: ignored; User agent uses --model_path")
     parser.add_argument("--user_max_turns", type=int, default=5,
                     help="Maximum number of Student-User conversation turns")
     parser.add_argument("--user_prompt_template", type=str, default=None,
@@ -122,6 +124,21 @@ if args.input_file is None:
 if not args.input_file.endswith("prepared.jsonl") and not args.input_file.endswith("prepared.json"):
     print("Error: Input file must end with prepared.json(l). Please make sure you are using the correct input file.")
     exit(1)
+if args.start_idx < 0:
+    raise ValueError("--start_idx must be a non-negative integer.")
+if args.batch_size is not None and args.batch_size <= 0:
+    raise ValueError("--batch_size must be a positive integer.")
+
+if args.user_model != args.model_path:
+    print(
+        f"⚠️  --user_model ({args.user_model}) is deprecated and ignored. "
+        f"Using --model_path ({args.model_path}) for User agent."
+    )
+if args.virtual_tool_model != args.model_path:
+    print(
+        f"⚠️  --virtual_tool_model ({args.virtual_tool_model}) is deprecated and ignored. "
+        f"Using --model_path ({args.model_path}) for Virtual Tool simulation."
+    )
 
 # Constants
 MODEL_NAME = args.model_path
@@ -130,17 +147,6 @@ CHECKPOINT_EVERY = args.checkpoint_every
 
 model_abbreviation = get_model_abbreviation(args.model_path)
 config_str = f"{model_abbreviation}_multiagent_pfc" if args.parallel_function_calls else f"{model_abbreviation}_multiagent_sfc"
-
-base_name = INPUT_FILE_NAME[:INPUT_FILE_NAME.rfind('.')]
-if base_name.endswith("_4prepared"):
-    base_name = base_name[:-10]
-
-if args.num_trials > 1:
-    checkpoint_files = [f"{base_name}_{config_str}_results{i}_checkpoint.json" for i in range(args.num_trials)]
-    saved_files = [f"{base_name}_{config_str}_results{i}.jsonl" for i in range(args.num_trials)]
-else:
-    checkpoint_file = f"{base_name}_{config_str}_results_checkpoint.json"
-    saved_file = f"{base_name}_{config_str}_results.jsonl"
 
 # Resolve API keys from env vars
 if args.engine == "openrouter_api" and not args.openrouter_api_key:
@@ -410,9 +416,8 @@ def create_student_agent_config(item, client, api_key=None, profile=None):
 
     # --- VIRTUAL TOOLS ---
     if args.virtual_tools:
-        virtual_tool_model = args.model_path if args.engine == "vllm_api" else args.virtual_tool_model
-        print(f"👻 Configuring Student with VIRTUAL tools (Agent: {args.model_path}, VirtualTool: {virtual_tool_model})...")
-        virtual_backend = VirtualToolBackend(client, model_path=virtual_tool_model)
+        print(f"👻 Configuring Student with VIRTUAL tools (Agent/User/VirtualTool: {args.model_path})...")
+        virtual_backend = VirtualToolBackend(client, model_path=args.model_path)
         virtual_tool_funcs = []
 
         # Build scenario context for virtual tools from metadata
@@ -700,7 +705,7 @@ async def run_student_user_loop_async(
     run_context = RunContextWrapper(context=None)
 
     # --- Create User agent (no tools) ---
-    user_model = OpenAIResponsesModel(args.user_model, openai_client=user_client)
+    user_model = OpenAIResponsesModel(args.model_path, openai_client=user_client)
     user_agent = Agent(
         name="User",
         instructions=user_instructions,
@@ -799,7 +804,7 @@ async def process_single_item_multiagent_async(item, api_key=None, profile=None)
     if student_config is None:
         raise ValueError(f"Could not create student agent config for item {prompt_id}")
 
-    # Create user agent client (may use a different model)
+    # Create user agent client
     user_client = _make_client()
 
     print(f"🚀 Running multi-agent inference for item {prompt_id}...")
@@ -1004,6 +1009,41 @@ def sort_dataset_by_row_id(dataset):
     return sorted(dataset, key=get_sort_key)
 
 
+def get_input_base_name(input_file):
+    base_name = input_file[: input_file.rfind('.')]
+    if base_name.endswith("_4prepared"):
+        return base_name[:-10]
+    if base_name.endswith("_prepared"):
+        return base_name[:-9]
+    return base_name
+
+
+def resolve_processing_range(total_rows):
+    if total_rows <= 0:
+        raise ValueError(f"Input dataset is empty: {args.input_file}")
+    if args.start_idx >= total_rows:
+        raise ValueError(
+            f"--start_idx ({args.start_idx}) must be smaller than dataset size ({total_rows})."
+        )
+
+    start_idx = args.start_idx
+    requested_end_idx = total_rows if args.batch_size is None else args.start_idx + args.batch_size
+    end_idx = min(requested_end_idx, total_rows)
+    return start_idx, requested_end_idx, end_idx
+
+
+def build_output_paths(base_name, start_idx, end_idx, trial_idx=None):
+    trial_suffix = f"{trial_idx}" if trial_idx is not None else ""
+    range_mode = args.batch_size is not None or args.start_idx != 0
+    if range_mode:
+        saved_file = f"{base_name}_{config_str}_results{trial_suffix}_{start_idx}_{end_idx}.jsonl"
+        checkpoint_file = f"{base_name}_{config_str}_results{trial_suffix}_{start_idx}_{end_idx}_checkpoint.json"
+    else:
+        saved_file = f"{base_name}_{config_str}_results{trial_suffix}.jsonl"
+        checkpoint_file = f"{base_name}_{config_str}_results{trial_suffix}_checkpoint.json"
+    return saved_file, checkpoint_file
+
+
 def add_generation_config_to_metadata(dataset, model_short_name, generation_params):
     config_entry = {
         "model": model_short_name,
@@ -1025,7 +1065,9 @@ def generate_and_update(dataset, checkpoint_file):
     generation_params = {
         "engine": args.engine,
         "model_path": args.model_path,
-        "user_model": args.user_model,
+        "student_model": args.model_path,
+        "user_model": args.model_path,
+        "virtual_tool_model": args.model_path,
         "user_max_turns": args.user_max_turns,
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,
@@ -1035,6 +1077,8 @@ def generate_and_update(dataset, checkpoint_file):
         "timeout": args.timeout,
         "max_workers": args.max_workers,
         "virtual_tools": args.virtual_tools,
+        "start_idx": args.start_idx,
+        "batch_size": args.batch_size,
     }
 
     items_to_process = []
@@ -1135,8 +1179,7 @@ def main():
     print("=" * 50)
     print("🚀 MULTI-AGENT PROCESSING CONFIGURATION")
     print("=" * 50)
-    print(f"Student model: {args.model_path}")
-    print(f"User model:    {args.user_model}")
+    print(f"Model (Student/User/VirtualTool): {args.model_path}")
     print(f"User max turns: {args.user_max_turns}")
     print(f"Max agent turns per student response: {args.max_turns}")
     print(f"Tool mode:     {'Virtual' if args.virtual_tools else 'Real MCP'}")
@@ -1149,18 +1192,31 @@ def main():
         if not isinstance(dataset, list):
             dataset = [dataset]
 
+        total_rows = len(dataset)
+        start_idx, requested_end_idx, end_idx = resolve_processing_range(total_rows)
+        target_dataset = dataset[start_idx:end_idx]
+        base_name = get_input_base_name(args.input_file)
+
+        print(
+            f"Dataset rows: {total_rows}. Requested range: "
+            f"[{start_idx}, {requested_end_idx}). Effective range: [{start_idx}, {end_idx})."
+        )
+        print(f"Processing {len(target_dataset)} rows.")
+
         if args.num_trials == 1:
-            updated_dataset = generate_and_update(dataset, checkpoint_file)
+            saved_file, checkpoint_file = build_output_paths(base_name, start_idx, end_idx)
+            updated_dataset = generate_and_update(target_dataset, checkpoint_file)
             save_dataset(updated_dataset, saved_file, convert_to_jsonl=True)
             if os.path.exists(checkpoint_file):
                 os.remove(checkpoint_file)
             print("Final dataset saved. Checkpoint removed.")
         else:
             for i in range(args.num_trials):
-                updated_dataset = generate_and_update(dataset, checkpoint_files[i])
-                save_dataset(updated_dataset, saved_files[i], convert_to_jsonl=True)
-                if os.path.exists(checkpoint_files[i]):
-                    os.remove(checkpoint_files[i])
+                saved_file, checkpoint_file = build_output_paths(base_name, start_idx, end_idx, trial_idx=i)
+                updated_dataset = generate_and_update(target_dataset, checkpoint_file)
+                save_dataset(updated_dataset, saved_file, convert_to_jsonl=True)
+                if os.path.exists(checkpoint_file):
+                    os.remove(checkpoint_file)
                 print(f"Dataset for trial {i} saved.")
 
     finally:
