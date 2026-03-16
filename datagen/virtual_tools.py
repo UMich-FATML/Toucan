@@ -1,4 +1,6 @@
 import json
+import re
+import hashlib
 from typing import Dict, Any, List, Optional
 from openai import AsyncClient
 
@@ -9,17 +11,7 @@ VIRTUAL_TOOL_OUTPUT_JSON_SCHEMA = {
     "type": "object",
     "properties": {
         "error": {"type": "string"},
-        "response": {
-            "anyOf": [
-                {"type": "string"},
-                {"type": "object", "additionalProperties": True},
-                {"type": "array"},
-                {"type": "number"},
-                {"type": "integer"},
-                {"type": "boolean"},
-                {"type": "null"},
-            ]
-        },
+        "response": {"type": "string"},
     },
     "required": ["error", "response"],
     "additionalProperties": False,
@@ -244,24 +236,182 @@ class VirtualToolBackend:
             return {"error": str(e), "response": ""}
 
 
+_ALLOWED_SCHEMA_KEYS = {
+    "type",
+    "properties",
+    "required",
+    "additionalProperties",
+    "items",
+    "enum",
+    "anyOf",
+    "oneOf",
+    "allOf",
+    "description",
+    "$defs",
+    "$ref",
+}
+
+
+def _sanitize_tool_name(raw_name: str) -> str:
+    """Normalize function names to OpenAI's [A-Za-z0-9_-] requirement."""
+    raw_name = str(raw_name or "").strip()
+    sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", raw_name)
+    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+    if sanitized:
+        return sanitized
+    digest = hashlib.sha1(raw_name.encode("utf-8")).hexdigest()[:8]
+    return f"tool_{digest}"
+
+
+def _sanitize_schema_node(
+    node: Any,
+    root_defs: Dict[str, Any],
+    is_root: bool = False,
+    resolving_refs: Optional[set] = None,
+) -> Dict[str, Any]:
+    """Recursively coerce MCP schemas into strict-mode-compatible shape."""
+    if resolving_refs is None:
+        resolving_refs = set()
+
+    if not isinstance(node, dict):
+        return {"type": "object", "properties": {}, "required": [], "additionalProperties": False} if is_root else {"type": "string"}
+
+    # Resolve local refs whenever possible.
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        m = re.fullmatch(r"#/\$defs/([^/]+)", ref)
+        if m:
+            ref_key = m.group(1)
+            if ref_key in resolving_refs:
+                return {"type": "string", "description": "recursive ref fallback"}
+            target = root_defs.get(ref_key)
+            if isinstance(target, dict):
+                resolving_refs.add(ref_key)
+                try:
+                    return _sanitize_schema_node(target, root_defs, is_root=False, resolving_refs=resolving_refs)
+                finally:
+                    resolving_refs.discard(ref_key)
+        return {"type": "string", "description": "unresolved ref fallback"}
+
+    cleaned: Dict[str, Any] = {}
+    for key, value in node.items():
+        if key in _ALLOWED_SCHEMA_KEYS:
+            cleaned[key] = value
+
+    # Preserve only string descriptions.
+    if "description" in cleaned and not isinstance(cleaned["description"], str):
+        cleaned.pop("description", None)
+
+    # Recurse composition keywords.
+    for comp_key in ("anyOf", "oneOf", "allOf"):
+        if comp_key in cleaned:
+            values = cleaned.get(comp_key)
+            if isinstance(values, list):
+                cleaned[comp_key] = [
+                    _sanitize_schema_node(v, root_defs, is_root=False, resolving_refs=resolving_refs)
+                    for v in values
+                ]
+            else:
+                cleaned.pop(comp_key, None)
+
+    # Recurse nested defs.
+    if "$defs" in cleaned:
+        defs = cleaned.get("$defs")
+        if isinstance(defs, dict):
+            cleaned["$defs"] = {
+                k: _sanitize_schema_node(v, root_defs, is_root=False, resolving_refs=resolving_refs)
+                for k, v in defs.items()
+                if isinstance(k, str)
+            }
+        else:
+            cleaned.pop("$defs", None)
+
+    schema_type = cleaned.get("type")
+    if isinstance(schema_type, list):
+        variants = []
+        for t in schema_type:
+            if isinstance(t, str):
+                variants.append({"type": t})
+        cleaned.pop("type", None)
+        if variants:
+            existing = cleaned.get("anyOf", [])
+            if isinstance(existing, list):
+                cleaned["anyOf"] = variants + existing
+            else:
+                cleaned["anyOf"] = variants
+            schema_type = None
+
+    if not isinstance(schema_type, str):
+        if "properties" in cleaned:
+            schema_type = "object"
+        elif "items" in cleaned:
+            schema_type = "array"
+        elif "enum" in cleaned and isinstance(cleaned["enum"], list) and cleaned["enum"]:
+            enum_types = {type(v).__name__ for v in cleaned["enum"] if v is not None}
+            if len(enum_types) == 1:
+                tname = next(iter(enum_types))
+                enum_type_map = {
+                    "str": "string",
+                    "int": "integer",
+                    "float": "number",
+                    "bool": "boolean",
+                }
+                schema_type = enum_type_map.get(tname, "string")
+            else:
+                schema_type = "string"
+        elif any(k in cleaned for k in ("anyOf", "oneOf", "allOf")):
+            schema_type = None
+        else:
+            schema_type = "object" if is_root else "string"
+
+    if isinstance(schema_type, str):
+        cleaned["type"] = schema_type
+
+    if cleaned.get("type") == "object":
+        props = cleaned.get("properties")
+        if not isinstance(props, dict):
+            props = {}
+        sanitized_props: Dict[str, Any] = {}
+        for key, value in props.items():
+            if isinstance(key, str):
+                sanitized_props[key] = _sanitize_schema_node(value, root_defs, is_root=False, resolving_refs=resolving_refs)
+        cleaned["properties"] = sanitized_props
+
+        required = cleaned.get("required")
+        if isinstance(required, list):
+            cleaned["required"] = [k for k in required if isinstance(k, str) and k in sanitized_props]
+        else:
+            cleaned["required"] = []
+
+        cleaned["additionalProperties"] = False
+        cleaned.pop("items", None)
+
+    elif cleaned.get("type") == "array":
+        items = cleaned.get("items")
+        if isinstance(items, dict):
+            cleaned["items"] = _sanitize_schema_node(items, root_defs, is_root=False, resolving_refs=resolving_refs)
+        else:
+            cleaned["items"] = {"type": "string"}
+        cleaned.pop("properties", None)
+        cleaned.pop("required", None)
+        cleaned.pop("additionalProperties", None)
+
+    else:
+        cleaned.pop("properties", None)
+        cleaned.pop("required", None)
+        cleaned.pop("additionalProperties", None)
+        cleaned.pop("items", None)
+
+    # Final prune to ensure only allowed keys survive.
+    return {k: v for k, v in cleaned.items() if k in _ALLOWED_SCHEMA_KEYS}
+
+
 def _make_strict_schema(input_schema: Dict) -> Dict:
-    """
-    Build a strict-mode-compatible JSON schema from a smithery inputSchema.
-    Ensures additionalProperties: false at every object level and that
-    required/properties are present.
-    """
-    schema = dict(input_schema)
-    schema.setdefault("type", "object")
-    schema.setdefault("properties", {})
-    schema.setdefault("required", [])
-    schema["additionalProperties"] = False
-
-    # Recursively fix nested object properties
-    for prop_name, prop_def in schema["properties"].items():
-        if isinstance(prop_def, dict) and prop_def.get("type") == "object":
-            schema["properties"][prop_name] = _make_strict_schema(prop_def)
-
-    return schema
+    """Build a strict-mode-compatible JSON schema from an MCP input schema."""
+    if not isinstance(input_schema, dict):
+        input_schema = {}
+    root_defs = input_schema.get("$defs", {}) if isinstance(input_schema.get("$defs"), dict) else {}
+    return _sanitize_schema_node(input_schema, root_defs=root_defs, is_root=True)
 
 
 def create_dynamic_virtual_tool(tool_def: Dict, backend: VirtualToolBackend,
@@ -281,8 +431,7 @@ def create_dynamic_virtual_tool(tool_def: Dict, backend: VirtualToolBackend,
     crashing the entire item.
     """
     raw_name = tool_def.get('name', '')
-    # Sanitize: replace dots (and any other chars invalid for OpenAI function names)
-    tool_name = raw_name.replace('.', '_')
+    tool_name = _sanitize_tool_name(raw_name)
     tool_desc = tool_def.get('description', '')
     input_schema = tool_def.get('inputSchema', tool_def.get('input_schema', {}))
 

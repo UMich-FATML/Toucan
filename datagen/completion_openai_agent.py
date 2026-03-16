@@ -105,12 +105,15 @@ def get_args():
 
     #tool parameters
     parser.add_argument("--virtual_tools", action="store_true", help="Use LLM-hallucinated tools instead of real MCP connections")
+    parser.add_argument("--virtual_tool_model", type=str, default=None,
+                    help="Model for virtual tool simulation (default: same as --model_path)")
     parser.add_argument("--mcp_server_dir", type=str, default="../mcp_servers/smithery_mcp_servers_0210",
                     help="Path to directory of MCP server JSON files (named {server_id}.json). "
                          "Enriches virtual tools with server analysis/descriptions from smithery files.")
     return parser.parse_args()
 
 args = get_args()
+args.virtual_tool_model = args.virtual_tool_model or args.model_path
 print(f"Response Generation Manager. Arguments: {args}") # For logging
 
 if args.input_file is None:
@@ -450,8 +453,9 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
         for item_flow in result.new_items:
             if item_flow.type == "reasoning_item":
                 # Collect reasoning content
-                if hasattr(item_flow, 'raw_item') and hasattr(item_flow.raw_item, 'content'):
-                    for content in item_flow.raw_item.content:
+                raw_content = getattr(getattr(item_flow, 'raw_item', None), 'content', None)
+                if isinstance(raw_content, list):
+                    for content in raw_content:
                         if hasattr(content, 'text'):
                             current_reasoning.append(content.text)
 
@@ -541,9 +545,10 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
             
             elif item_flow.type == "message_output_item":
                 # Extract final assistant message
-                if hasattr(item_flow, 'raw_item') and hasattr(item_flow.raw_item, 'content'):
+                raw_content = getattr(getattr(item_flow, 'raw_item', None), 'content', None)
+                if isinstance(raw_content, list):
                     message_texts = []
-                    for content in item_flow.raw_item.content:
+                    for content in raw_content:
                         if hasattr(content, 'text'):
                             message_texts.append(content.text)
                     
@@ -578,8 +583,9 @@ def convert_openai_agent_result_to_messages(result, original_messages, system_pr
         if hasattr(result, 'new_items') and result.new_items:
             for item_flow in result.new_items:
                 if item_flow.type == "reasoning_item":
-                    if hasattr(item_flow, 'raw_item') and hasattr(item_flow.raw_item, 'content'):
-                        for content in item_flow.raw_item.content:
+                    raw_content = getattr(getattr(item_flow, 'raw_item', None), 'content', None)
+                    if isinstance(raw_content, list):
+                        for content in raw_content:
                             if hasattr(content, 'text'):
                                 reasoning_content.append(content.text)
         
@@ -664,9 +670,10 @@ def create_agent_for_item(item, api_key=None, profile=None):
     if hasattr(args, 'virtual_tools') and args.virtual_tools:
         ensure_question_generation_history_loaded()
 
-        print(f"👻 Configuring Agent with VIRTUAL tools (Agent: {args.model_path}, VirtualTool: {args.model_path})...")
-        virtual_backend = VirtualToolBackend(client, model_path=args.model_path)
+        print(f"👻 Configuring Agent with VIRTUAL tools (Agent: {args.model_path}, VirtualTool: {args.virtual_tool_model})...")
+        virtual_backend = VirtualToolBackend(client, model_path=args.virtual_tool_model)
         virtual_tool_funcs = []
+        registered_tool_names = set()
 
         # Keep scenario context used by virtual tool simulation.
         question = metadata.get('question', '')
@@ -675,11 +682,22 @@ def create_agent_for_item(item, api_key=None, profile=None):
 
         target_tools = metadata.get('target_tools', [])
         expected_outputs_by_tool = {}
+        required_tool_names = set()
         for tt in (target_tools or []):
             if isinstance(tt, dict):
                 tool_key = tt.get('tool', '')
                 if tool_key:
-                    expected_outputs_by_tool[tool_key] = tt.get('output', '')
+                    normalized_tool_key = tool_key.split("::", 1)[-1]
+                    expected_outputs_by_tool[normalized_tool_key] = tt.get('output', '')
+                    required_tool_names.add(normalized_tool_key)
+
+        virtual_tool_diagnostics = {
+            "total_tools_discovered": 0,
+            "tools_registered": 0,
+            "required_tools_expected": sorted(required_tool_names),
+            "required_tool_errors": [],
+            "optional_tool_errors": [],
+        }
 
         row_id_key = normalize_row_id_key(metadata.get('row_id'))
         matched_history = QUESTION_GEN_HISTORY_BY_ROW_ID.get(row_id_key) if row_id_key is not None else None
@@ -710,6 +728,7 @@ def create_agent_for_item(item, api_key=None, profile=None):
                     server_name = smithery_data.get('server', {}).get('displayName', server_name)
 
             for tool_def in tools_list:
+                virtual_tool_diagnostics["total_tools_discovered"] += 1
                 # Create the dynamic python function for this tool
                 if server_analysis and server_name and tool_def['description']:
                     tool_def['description'] = f'''This tool comes from the MCP server: {server_name}. 
@@ -730,12 +749,43 @@ def create_agent_for_item(item, api_key=None, profile=None):
                     "server_name": server_name,
                     "server_description": server_analysis,
                 }
-                v_tool = create_dynamic_virtual_tool(
-                    tool_def,
-                    virtual_backend,
-                    scenario_context=scenario_context,
-                )
-                virtual_tool_funcs.append(v_tool)
+                is_required = tool_raw_name in required_tool_names
+                try:
+                    v_tool = create_dynamic_virtual_tool(
+                        tool_def,
+                        virtual_backend,
+                        scenario_context=scenario_context,
+                    )
+                    virtual_tool_funcs.append(v_tool)
+                    registered_tool_names.add(tool_raw_name)
+                except Exception as tool_error:
+                    err_entry = {
+                        "tool": tool_raw_name,
+                        "server_id": server_id,
+                        "server_name": server_name,
+                        "error": str(tool_error),
+                    }
+                    if is_required:
+                        virtual_tool_diagnostics["required_tool_errors"].append(err_entry)
+                    else:
+                        virtual_tool_diagnostics["optional_tool_errors"].append(err_entry)
+                    print(
+                        f"⚠️ Skipping virtual tool '{tool_raw_name}' "
+                        f"(required={is_required}) due to registration error: {tool_error}"
+                    )
+
+        missing_required_tools = sorted(required_tool_names - registered_tool_names)
+        virtual_tool_diagnostics["tools_registered"] = len(virtual_tool_funcs)
+        virtual_tool_diagnostics["missing_required_tools"] = missing_required_tools
+        virtual_tool_diagnostics["tools_skipped_required"] = len(virtual_tool_diagnostics["required_tool_errors"])
+        virtual_tool_diagnostics["tools_skipped_optional"] = len(virtual_tool_diagnostics["optional_tool_errors"])
+        metadata["virtual_tool_diagnostics"] = virtual_tool_diagnostics
+
+        if missing_required_tools:
+            raise ValueError(
+                "Required virtual tool(s) failed to register: "
+                + ", ".join(missing_required_tools)
+            )
 
         if not virtual_tool_funcs:
             print("❌ No tool definitions found in metadata for virtual generation.")
@@ -747,7 +797,8 @@ def create_agent_for_item(item, api_key=None, profile=None):
             "instructions": "You are a helpful assistant. Use the provided tools to answer the user query.",
             "model": model,
             "tools": virtual_tool_funcs, # <--- The Agent uses these directly
-            "mcp_servers_list": [] # No real connections
+            "mcp_servers_list": [], # No real connections
+            "virtual_tool_diagnostics": virtual_tool_diagnostics,
         }
 
     # --- MODE 2: REAL MCP SERVERS (Existing Logic) ---
@@ -858,6 +909,8 @@ async def process_single_item_agent_async(item, api_key=None, profile=None):
     agent_config = None
     if args.agent:
         agent_config = create_agent_for_item(item, api_key, profile)
+    if agent_config and agent_config.get("virtual_tool_diagnostics"):
+        item.setdefault("metadata", {})["virtual_tool_diagnostics"] = agent_config["virtual_tool_diagnostics"]
     
     if agent_config:
         try:

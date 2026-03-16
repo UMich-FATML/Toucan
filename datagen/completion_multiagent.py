@@ -15,6 +15,7 @@ import threading
 import queue
 import signal
 import atexit
+import traceback
 from time import sleep, time
 from tqdm import tqdm
 from virtual_tools import VirtualToolBackend, create_dynamic_virtual_tool
@@ -415,6 +416,7 @@ def create_student_agent_config(item, client, api_key=None, profile=None):
         print(f"👻 Configuring Student with VIRTUAL tools (Agent/User: {args.model_path}, VirtualTool: {args.virtual_tool_model})...")
         virtual_backend = VirtualToolBackend(client, model_path=args.virtual_tool_model)
         virtual_tool_funcs = []
+        registered_tool_names = set()
         tool_simulation_messages = []  # shared across all tools for cross-tool continuity
 
         # Build scenario context for virtual tools from metadata
@@ -423,11 +425,22 @@ def create_student_agent_config(item, client, api_key=None, profile=None):
         workflow_analysis = metadata.get('cross_tool_workflow', '')
         target_tools = metadata.get('target_tools', [])
         expected_outputs_by_tool = {}
+        required_tool_names = set()
         for tt in (target_tools or []):
             if isinstance(tt, dict):
                 tool_key = tt.get('tool', '')
                 if tool_key:
-                    expected_outputs_by_tool[tool_key] = tt.get('output', '')
+                    normalized_tool_key = tool_key.split("::", 1)[-1]
+                    expected_outputs_by_tool[normalized_tool_key] = tt.get('output', '')
+                    required_tool_names.add(normalized_tool_key)
+
+        virtual_tool_diagnostics = {
+            "total_tools_discovered": 0,
+            "tools_registered": 0,
+            "required_tools_expected": sorted(required_tool_names),
+            "required_tool_errors": [],
+            "optional_tool_errors": [],
+        }
 
         for server_info in mcp_servers:
             server_id = server_info.get('server_id', '')
@@ -446,6 +459,7 @@ def create_student_agent_config(item, client, api_key=None, profile=None):
                     server_name = smithery_data.get('server', {}).get('displayName', server_name)
 
             for tool_def in tools_list:
+                virtual_tool_diagnostics["total_tools_discovered"] += 1
                 if server_analysis and server_name and tool_def.get('description'):
                     tool_def = dict(tool_def)
                     tool_def['description'] = (
@@ -463,9 +477,43 @@ def create_student_agent_config(item, client, api_key=None, profile=None):
                     'expected_output': expected_output,
                     'tool_simulation_messages': tool_simulation_messages,
                 }
-                v_tool = create_dynamic_virtual_tool(tool_def, virtual_backend,
-                                                     scenario_context=scenario_ctx)
-                virtual_tool_funcs.append(v_tool)
+                is_required = tool_raw_name in required_tool_names
+                try:
+                    v_tool = create_dynamic_virtual_tool(
+                        tool_def,
+                        virtual_backend,
+                        scenario_context=scenario_ctx,
+                    )
+                    virtual_tool_funcs.append(v_tool)
+                    registered_tool_names.add(tool_raw_name)
+                except Exception as tool_error:
+                    err_entry = {
+                        "tool": tool_raw_name,
+                        "server_id": server_id,
+                        "server_name": server_name,
+                        "error": str(tool_error),
+                    }
+                    if is_required:
+                        virtual_tool_diagnostics["required_tool_errors"].append(err_entry)
+                    else:
+                        virtual_tool_diagnostics["optional_tool_errors"].append(err_entry)
+                    print(
+                        f"⚠️ Skipping virtual tool '{tool_raw_name}' "
+                        f"(required={is_required}) due to registration error: {tool_error}"
+                    )
+
+        missing_required_tools = sorted(required_tool_names - registered_tool_names)
+        virtual_tool_diagnostics["tools_registered"] = len(virtual_tool_funcs)
+        virtual_tool_diagnostics["missing_required_tools"] = missing_required_tools
+        virtual_tool_diagnostics["tools_skipped_required"] = len(virtual_tool_diagnostics["required_tool_errors"])
+        virtual_tool_diagnostics["tools_skipped_optional"] = len(virtual_tool_diagnostics["optional_tool_errors"])
+        metadata["virtual_tool_diagnostics"] = virtual_tool_diagnostics
+
+        if missing_required_tools:
+            raise ValueError(
+                "Required virtual tool(s) failed to register: "
+                + ", ".join(missing_required_tools)
+            )
 
         if not virtual_tool_funcs:
             print("❌ No tool definitions found for virtual generation.")
@@ -476,7 +524,8 @@ def create_student_agent_config(item, client, api_key=None, profile=None):
             "instructions": STUDENT_PROMPT_TEMPLATE,
             "model": model,
             "tools": virtual_tool_funcs,
-            "mcp_servers_list": []
+            "mcp_servers_list": [],
+            "virtual_tool_diagnostics": virtual_tool_diagnostics,
         }
 
     # --- REAL MCP SERVERS ---
@@ -555,8 +604,9 @@ def extract_new_messages_from_result(result):
 
     for item_flow in result.new_items:
         if item_flow.type == "reasoning_item":
-            if hasattr(item_flow, 'raw_item') and hasattr(item_flow.raw_item, 'content'):
-                for content in item_flow.raw_item.content:
+            raw_content = getattr(getattr(item_flow, 'raw_item', None), 'content', None)
+            if isinstance(raw_content, list):
+                for content in raw_content:
                     if hasattr(content, 'text'):
                         current_reasoning.append(content.text)
 
@@ -632,9 +682,10 @@ def extract_new_messages_from_result(result):
                 })
 
         elif item_flow.type == "message_output_item":
-            if hasattr(item_flow, 'raw_item') and hasattr(item_flow.raw_item, 'content'):
+            raw_content = getattr(getattr(item_flow, 'raw_item', None), 'content', None)
+            if isinstance(raw_content, list):
                 message_texts = []
-                for content in item_flow.raw_item.content:
+                for content in raw_content:
                     if hasattr(content, 'text'):
                         message_texts.append(content.text)
 
@@ -801,6 +852,8 @@ async def process_single_item_multiagent_async(item, api_key=None, profile=None)
     student_config = create_student_agent_config(item, _make_client(), api_key, profile)
     if student_config is None:
         raise ValueError(f"Could not create student agent config for item {prompt_id}")
+    if student_config.get("virtual_tool_diagnostics"):
+        metadata["virtual_tool_diagnostics"] = student_config["virtual_tool_diagnostics"]
 
     # Create user agent client
     user_client = _make_client()
@@ -882,6 +935,7 @@ def process_single_item_multiagent(item, api_key=None, profile=None):
         return asyncio.run(process_single_item_multiagent_async(item, api_key, profile))
     except Exception as e:
         print(f"Error processing item {prompt_id}: {str(e)}")
+        print(traceback.format_exc())
         message = item["messages"]
         item['messages'] = message + [{"role": "assistant", "content": f"[ERROR: {str(e)}]"}]
         return item
