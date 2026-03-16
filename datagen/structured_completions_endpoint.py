@@ -90,6 +90,25 @@ def get_args():
     help="vLLM API base URL, e.g. http://localhost:8000/v1.",
   )
   parser.add_argument("--api_key", type=str, default="EMPTY", help="vLLM API key.")
+  parser.add_argument(
+    "--engine",
+    type=str,
+    default="vllm_api",
+    choices=["vllm_api", "openrouter_api"],
+    help="API engine to use.",
+  )
+  parser.add_argument(
+    "--openrouter_url",
+    type=str,
+    default="https://openrouter.ai/api/v1",
+    help="OpenRouter API URL.",
+  )
+  parser.add_argument(
+    "--openrouter_api_key",
+    type=str,
+    default="",
+    help="OpenRouter API Key (or set OPENROUTER_API_KEY env var).",
+  )
   parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature.")
   parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling.")
   parser.add_argument(
@@ -129,10 +148,20 @@ if args.start_idx < 0:
 if args.batch_size is not None and args.batch_size <= 0:
   raise ValueError("--batch_size must be a positive integer.")
 
-_base_url = args.base_url.rstrip("/")
-if not _base_url.endswith("/v1"):
-  raise ValueError("--base_url must end with /v1.")
-args.base_url = _base_url
+if args.engine == "openrouter_api":
+  _resolved_api_key = args.openrouter_api_key or os.getenv("OPENROUTER_API_KEY", "")
+  if not _resolved_api_key:
+    raise ValueError(
+      "OpenRouter API Key is required when using openrouter_api engine. "
+      "Provide --openrouter_api_key or set OPENROUTER_API_KEY env var."
+    )
+  _resolved_base_url = args.openrouter_url.rstrip("/")
+else:
+  _base_url = args.base_url.rstrip("/")
+  if not _base_url.endswith("/v1"):
+    raise ValueError("--base_url must end with /v1.")
+  _resolved_base_url = _base_url
+  _resolved_api_key = args.api_key
 
 try:
   RESPONSE_JSON_SCHEMA, OUTPUT_SCHEMA_VALIDATOR = load_response_schema_config(
@@ -171,11 +200,10 @@ async def request_completion_async(messages, client):
       "json_schema": RESPONSE_JSON_SCHEMA,
     },
   }
-  extra_body = {"repetition_penalty": args.repetition_penalty}
   if args.max_tokens is not None and args.max_tokens > 0:
     payload["max_tokens"] = args.max_tokens
-  if extra_body:
-    payload["extra_body"] = extra_body
+  if args.engine == "vllm_api":
+    payload["extra_body"] = {"repetition_penalty": args.repetition_penalty}
 
   for attempt in range(args.api_retries):
     try:
@@ -282,6 +310,7 @@ def add_generation_config_to_metadata(dataset):
   config_entry = {
     "model": model_abbreviation,
     "generation_params": {
+      "engine": args.engine,
       "model_name": args.model_name,
       "concurrency": args.concurrency,
       "temperature": args.temperature,
@@ -404,7 +433,7 @@ async def main():
   print(f"Output file: {saved_file}")
   print(f"Checkpoint dir: {checkpoint_dir}")
 
-  client = AsyncOpenAI(base_url=args.base_url, api_key=args.api_key)
+  client = AsyncOpenAI(base_url=_resolved_base_url, api_key=_resolved_api_key)
   try:
     updated_dataset = await generate_and_update(target_dataset, client, checkpoint_dir)
     save_dataset(updated_dataset, saved_file, convert_to_jsonl=True)

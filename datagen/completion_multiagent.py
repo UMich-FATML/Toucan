@@ -98,8 +98,8 @@ def get_args():
 
     # Tool parameters
     parser.add_argument("--virtual_tools", action="store_true", help="Use LLM-hallucinated tools instead of real MCP connections")
-    parser.add_argument("--virtual_tool_model", type=str, default="openai/gpt-4o-mini",
-                    help="Deprecated: ignored; virtual tools use --model_path")
+    parser.add_argument("--virtual_tool_model", type=str, default=None,
+                    help="Model for virtual tool simulation (default: same as --model_path)")
     parser.add_argument("--mcp_server_dir", type=str, default="../mcp_servers/smithery_mcp_servers_0210",
                     help="Path to directory of MCP server JSON files")
 
@@ -134,11 +134,7 @@ if args.user_model != args.model_path:
         f"⚠️  --user_model ({args.user_model}) is deprecated and ignored. "
         f"Using --model_path ({args.model_path}) for User agent."
     )
-if args.virtual_tool_model != args.model_path:
-    print(
-        f"⚠️  --virtual_tool_model ({args.virtual_tool_model}) is deprecated and ignored. "
-        f"Using --model_path ({args.model_path}) for Virtual Tool simulation."
-    )
+args.virtual_tool_model = args.virtual_tool_model or args.model_path
 
 # Constants
 MODEL_NAME = args.model_path
@@ -416,9 +412,10 @@ def create_student_agent_config(item, client, api_key=None, profile=None):
 
     # --- VIRTUAL TOOLS ---
     if args.virtual_tools:
-        print(f"👻 Configuring Student with VIRTUAL tools (Agent/User/VirtualTool: {args.model_path})...")
-        virtual_backend = VirtualToolBackend(client, model_path=args.model_path)
+        print(f"👻 Configuring Student with VIRTUAL tools (Agent/User: {args.model_path}, VirtualTool: {args.virtual_tool_model})...")
+        virtual_backend = VirtualToolBackend(client, model_path=args.virtual_tool_model)
         virtual_tool_funcs = []
+        tool_simulation_messages = []  # shared across all tools for cross-tool continuity
 
         # Build scenario context for virtual tools from metadata
         question = metadata.get('question', '')
@@ -463,7 +460,8 @@ def create_student_agent_config(item, client, api_key=None, profile=None):
                     'question': question,
                     'tool_analysis': tool_analysis,
                     'workflow_analysis': workflow_analysis,
-                    'expected_output': expected_output
+                    'expected_output': expected_output,
+                    'tool_simulation_messages': tool_simulation_messages,
                 }
                 v_tool = create_dynamic_virtual_tool(tool_def, virtual_backend,
                                                      scenario_context=scenario_ctx)
@@ -1067,7 +1065,7 @@ def generate_and_update(dataset, checkpoint_file):
         "model_path": args.model_path,
         "student_model": args.model_path,
         "user_model": args.model_path,
-        "virtual_tool_model": args.model_path,
+        "virtual_tool_model": args.virtual_tool_model,
         "user_max_turns": args.user_max_turns,
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,

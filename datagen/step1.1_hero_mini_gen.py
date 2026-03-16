@@ -2,26 +2,29 @@ import argparse
 import importlib.util
 import itertools
 import json
+import math
 import os
 import time
+from collections import defaultdict
 from typing import Any, Iterator
 
 """
-Hero-run prompt generator restricted to selected AI occupations.
+Hero-run prompt generator for selected AI occupations.
 
-Sampling strategy (coverage-first):
-  Phase 1 — Greedy set-cover: pick task triples that cover the most uncovered
-    tasks first, until every task with a matched server appears in at least one
-    prompt.  Uses at most ceil(N / num_tasks) prompts per occupation.
-  Phase 2 — Fill to budget: add further triples (in sorted index order) until
-    max_per_occupation is reached or all combinations are exhausted.
+Sampling strategy:
+  1) Compute number of possible task-combo scenarios per selected occupation:
+       C(num_tasks_in_occupation, num_tasks)
+  2) Keep top-K occupations by scenario count.
+  3) Per occupation, sample up to max_per_occupation scenarios with a
+     coverage+diversity heuristic over task combinations.
 
-Server selection: for each task in a triple the matched server with the highest
-similarity_score is chosen (ties broken by server_id lexicographically).  This
-yields exactly ONE prompt per task-triple, with no combinatorial explosion.
+Server selection: per sampled task-triple, servers are selected from matched
+options while favoring lower overall usage (ties follow similarity_score then
+server_id). This increases server diversity while yielding exactly one prompt
+per sampled scenario.
 
 Example:
-  python step1.1_hero_selected.py --no_refs --job_name hero_run_v1
+  python step1.1_hero_mini_gen.py --no_refs --job_name hero_run_v1
 """
 
 # ---------------------------------------------------------------------------
@@ -69,8 +72,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max_per_occupation",
         type=int,
-        default=30,
-        help="Maximum prompts per occupation.",
+        default=100,
+        help="Maximum sampled scenarios per selected occupation.",
+    )
+    parser.add_argument(
+        "--top_occupations",
+        type=int,
+        default=9,
+        help="Number of occupations to keep, ranked by possible scenario count.",
     )
     parser.add_argument(
         "--selected_occupations_file",
@@ -93,6 +102,11 @@ def parse_args() -> argparse.Namespace:
         "--self_contained",
         action="store_true",
         help="Use self contained variant of the generation prompt (gen_self_contained_q_from_onet_tasks_md).",
+    )
+    parser.add_argument(
+        "--count_only",
+        action="store_true",
+        help="Only print selected occupations and total prompt count; do not generate JSONL output.",
     )
 
     args = parser.parse_args()
@@ -117,69 +131,56 @@ def load_selected_onet_codes(path: str) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
-# Coverage-first sampling
+# Top-K occupation selection by scenario count
 # ---------------------------------------------------------------------------
 
 
-def coverage_first_sample(
-    tasks: list[dict[str, Any]],
+def scenario_count(task_count: int, num_tasks: int) -> int:
+    if task_count < num_tasks:
+        return 0
+    return math.comb(task_count, num_tasks)
+
+
+def select_top_occupations_by_scenarios(
+    occupation_to_tasks: dict[str, list[dict[str, Any]]],
+    selected_onet_codes: set[str],
     num_tasks: int,
-    max_per_occ: int,
-) -> list[tuple[int, ...]]:
-    """Return up to max_per_occ task-index tuples for one occupation.
+    top_occupations: int,
+) -> tuple[list[str], dict[str, int], dict[str, int], set[str]]:
+    """Return top occupations by task-combo count among selected occupation codes."""
+    candidates: list[tuple[str, int, int]] = []
+    dropped_insufficient_tasks: set[str] = set()
 
-    Phase 1: greedy set-cover — pick combos that cover the most uncovered task
-    indices first (ties broken by earliest index order).
-    Phase 2: fill remaining budget in sorted index order.
-    """
-    n = len(tasks)
-    if n < num_tasks or max_per_occ <= 0:
-        return []
+    for code in sorted(selected_onet_codes):
+        tasks = occupation_to_tasks.get(code, [])
+        task_count = len(tasks)
+        combos = scenario_count(task_count, num_tasks)
+        if combos <= 0:
+            dropped_insufficient_tasks.add(code)
+            continue
+        candidates.append((code, combos, task_count))
 
-    all_combos = list(itertools.combinations(range(n), num_tasks))
+    ranked = sorted(candidates, key=lambda item: (-item[1], item[0]))
+    selected_ranked = ranked[:top_occupations]
 
-    # Phase 1 — greedy coverage
-    uncovered: set[int] = set(range(n))
-    selected: list[tuple[int, ...]] = []
-    selected_set: set[tuple[int, ...]] = set()
-    # Work on a copy so we can remove without affecting all_combos
-    remaining = list(all_combos)
-
-    while uncovered and remaining:
-        best = max(remaining, key=lambda c: len(set(c) & uncovered))
-        new_coverage = set(best) & uncovered
-        if not new_coverage:
-            break
-        selected.append(best)
-        selected_set.add(best)
-        uncovered -= new_coverage
-        remaining.remove(best)
-
-        if len(selected) >= max_per_occ:
-            break
-
-    # Phase 2 — fill to budget in deterministic sorted order
-    if len(selected) < max_per_occ:
-        for combo in all_combos:
-            if len(selected) >= max_per_occ:
-                break
-            if combo not in selected_set:
-                selected.append(combo)
-                selected_set.add(combo)
-
-    return selected[:max_per_occ]
+    selected_codes = [code for code, _, _ in selected_ranked]
+    combos_by_code = {code: combos for code, combos, _ in selected_ranked}
+    task_count_by_code = {code: task_count for code, _, task_count in selected_ranked}
+    return selected_codes, combos_by_code, task_count_by_code, dropped_insufficient_tasks
 
 
 def select_server_id(
     task: dict[str, Any],
     combo_rank: int,
     avoid: set[str] | None = None,
+    usage_by_server: dict[str, int] | None = None,
 ) -> str | None:
-    """Pick a server for a task, cycling by combo_rank to diversify across prompts.
+    """Pick a server for a task, preferring less-used servers for diversity.
 
     Servers are sorted by descending similarity_score (ties broken by server_id).
     If `avoid` is given, prefer a server not in that set; fall back to cycling
-    through all servers when no alternative exists.
+    through all servers when no alternative exists. If `usage_by_server` is
+    provided, choose from least-used server IDs first.
     """
     servers = [s for s in task.get("matched_servers", []) if s.get("server_id")]
     if not servers:
@@ -190,9 +191,222 @@ def select_server_id(
     )
     if avoid:
         alternatives = [s for s in servers_sorted if s["server_id"] not in avoid]
-        if alternatives:
-            return alternatives[combo_rank % len(alternatives)]["server_id"]
-    return servers_sorted[combo_rank % len(servers_sorted)]["server_id"]
+        candidates = alternatives if alternatives else servers_sorted
+    else:
+        candidates = servers_sorted
+
+    if usage_by_server is None:
+        return candidates[combo_rank % len(candidates)]["server_id"]
+
+    min_usage = min(usage_by_server.get(s["server_id"], 0) for s in candidates)
+    least_used = [
+        s for s in candidates if usage_by_server.get(s["server_id"], 0) == min_usage
+    ]
+    return least_used[combo_rank % len(least_used)]["server_id"]
+
+
+def sample_diverse_task_combos(
+    tasks: list[dict[str, Any]],
+    num_tasks: int,
+    max_per_occ: int,
+) -> list[tuple[int, ...]]:
+    """Sample task-index combinations with coverage-first then diversity-first selection."""
+    n_tasks = len(tasks)
+    if n_tasks < num_tasks or max_per_occ <= 0:
+        return []
+
+    all_combos = list(itertools.combinations(range(n_tasks), num_tasks))
+    target = min(max_per_occ, len(all_combos))
+    if target == len(all_combos):
+        return all_combos
+
+    task_rarity: dict[int, float] = {}
+    for idx, task in enumerate(tasks):
+        unique_server_count = len(
+            {
+                s.get("server_id")
+                for s in task.get("matched_servers", [])
+                if s.get("server_id")
+            }
+        )
+        task_rarity[idx] = 1.0 / max(1, unique_server_count)
+
+    combo_meta: list[dict[str, Any]] = []
+    for combo in all_combos:
+        pairs = tuple(itertools.combinations(combo, 2))
+        combo_meta.append(
+            {
+                "combo": combo,
+                "set": set(combo),
+                "pairs": pairs,
+                "rarity": sum(task_rarity[i] for i in combo),
+                "tie": tuple(-i for i in combo),
+            }
+        )
+
+    selected: list[tuple[int, ...]] = []
+    selected_set: set[tuple[int, ...]] = set()
+    selected_combo_sets: list[set[int]] = []
+    pair_counts: dict[tuple[int, int], int] = defaultdict(int)
+    uncovered: set[int] = set(range(n_tasks))
+
+    def register(meta: dict[str, Any]) -> None:
+        combo = meta["combo"]
+        selected.append(combo)
+        selected_set.add(combo)
+        selected_combo_sets.append(meta["set"])
+        uncovered.difference_update(meta["set"])
+        for pair in meta["pairs"]:
+            pair_counts[pair] += 1
+
+    # Phase 1: ensure task coverage across sampled combos.
+    while len(selected) < target and uncovered:
+        best_meta = None
+        best_score = None
+        for meta in combo_meta:
+            combo = meta["combo"]
+            if combo in selected_set:
+                continue
+
+            cover = len(meta["set"] & uncovered)
+            if cover == 0:
+                continue
+
+            unseen_pairs = sum(1 for pair in meta["pairs"] if pair_counts[pair] == 0)
+            pair_penalty = sum(pair_counts[pair] for pair in meta["pairs"])
+            score = (cover, unseen_pairs, meta["rarity"], -pair_penalty, meta["tie"])
+
+            if best_score is None or score > best_score:
+                best_score = score
+                best_meta = meta
+
+        if best_meta is None:
+            break
+        register(best_meta)
+
+    # Phase 2: maximize novelty against existing sampled combos.
+    while len(selected) < target:
+        best_meta = None
+        best_score = None
+
+        for meta in combo_meta:
+            combo = meta["combo"]
+            if combo in selected_set:
+                continue
+
+            unseen_pairs = sum(1 for pair in meta["pairs"] if pair_counts[pair] == 0)
+            pair_penalty = sum(pair_counts[pair] for pair in meta["pairs"])
+
+            if selected_combo_sets:
+                dists = [
+                    num_tasks - len(meta["set"] & prev_set)
+                    for prev_set in selected_combo_sets
+                ]
+                min_dist = min(dists)
+                avg_dist = sum(dists) / len(dists)
+            else:
+                min_dist = num_tasks
+                avg_dist = float(num_tasks)
+
+            score = (
+                min_dist,
+                avg_dist,
+                unseen_pairs,
+                meta["rarity"],
+                -pair_penalty,
+                meta["tie"],
+            )
+
+            if best_score is None or score > best_score:
+                best_score = score
+                best_meta = meta
+
+        if best_meta is None:
+            break
+        register(best_meta)
+
+    return selected
+
+
+def build_sampled_combo_records(
+    occupation_to_tasks: dict[str, list[dict[str, Any]]],
+    selected_onet_codes: list[str],
+    num_tasks: int,
+    max_per_occ: int,
+    server_index: dict[str, dict[str, Any]] | None = None,
+    min_tools: int | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Build sampled combo records per occupation with server-diverse assignments.
+
+    If ``server_index`` and ``min_tools`` are provided, combos whose selected
+    servers collectively offer fewer than ``min_tools`` unique tools are skipped.
+    This prevents generating prompts that ask the LLM for multi-tool scenarios
+    when insufficient tools are actually available.
+    """
+    sampled_by_code: dict[str, list[dict[str, Any]]] = {}
+    skipped_insufficient_tools = 0
+
+    for onet_code in selected_onet_codes:
+        tasks = sorted(occupation_to_tasks[onet_code], key=lambda t: t.get("task_id", ""))
+        sampled_indices = sample_diverse_task_combos(tasks, num_tasks, max_per_occ)
+
+        server_usage: dict[str, int] = defaultdict(int)
+        records: list[dict[str, Any]] = []
+
+        for combo_rank, combo_indices in enumerate(sampled_indices):
+            selected_tasks = [tasks[i] for i in combo_indices]
+            used_in_combo: set[str] = set()
+            server_ids: list[str] = []
+            skip = False
+
+            for task in selected_tasks:
+                sid = select_server_id(
+                    task=task,
+                    combo_rank=combo_rank,
+                    avoid=used_in_combo,
+                    usage_by_server=server_usage,
+                )
+                if sid is None:
+                    skip = True
+                    break
+                server_ids.append(sid)
+                used_in_combo.add(sid)
+
+            if skip:
+                continue
+
+            # Check that the selected servers collectively have enough tools
+            if server_index is not None and min_tools is not None:
+                unique_tools: set[str] = set()
+                for sid in set(server_ids):
+                    server_data = server_index.get(sid, {})
+                    for tool in server_data.get("server", {}).get("tools", []):
+                        unique_tools.add(tool.get("name", ""))
+                if len(unique_tools) < min_tools:
+                    skipped_insufficient_tools += 1
+                    continue
+
+            for sid in server_ids:
+                server_usage[sid] += 1
+
+            records.append(
+                {
+                    "onet_code": onet_code,
+                    "task_indices": combo_indices,
+                    "tasks": selected_tasks,
+                    "selected_server_ids": tuple(server_ids),
+                }
+            )
+
+        sampled_by_code[onet_code] = records
+
+    if skipped_insufficient_tools > 0:
+        print(
+            f"Warning: Skipped {skipped_insufficient_tools} combo(s) whose selected "
+            f"servers had fewer than {min_tools} unique tools."
+        )
+
+    return sampled_by_code
 
 
 # ---------------------------------------------------------------------------
@@ -201,65 +415,60 @@ def select_server_id(
 
 
 def iter_hero_combos(
-    occupation_to_tasks: dict[str, list[dict[str, Any]]],
-    valid_onet_codes: list[str],
-    num_tasks: int,
-    max_per_occ: int,
+    sampled_combos_by_code: dict[str, list[dict[str, Any]]],
+    selected_onet_codes: list[str],
 ) -> Iterator[dict[str, Any]]:
-    """Yield combo records using coverage-first sampling with diversified server selection."""
-    for onet_code in sorted(valid_onet_codes):
-        tasks = sorted(occupation_to_tasks[onet_code], key=lambda t: t.get("task_id", ""))
-        selected_combos = coverage_first_sample(tasks, num_tasks, max_per_occ)
-
-        for combo_rank, combo_indices in enumerate(selected_combos):
-            selected_tasks = [tasks[i] for i in combo_indices]
-            server_ids = []
-            skip = False
-            used_in_combo: set[str] = set()
-            for task in selected_tasks:
-                sid = select_server_id(task, combo_rank, avoid=used_in_combo)
-                if sid is None:
-                    skip = True
-                    break
-                server_ids.append(sid)
-                used_in_combo.add(sid)
-            if skip:
-                continue
-
-            yield {
-                "onet_code": onet_code,
-                "task_indices": combo_indices,
-                "tasks": selected_tasks,
-                "selected_server_ids": tuple(server_ids),
-            }
+    """Yield pre-sampled combo records in occupation order."""
+    for onet_code in selected_onet_codes:
+        for record in sampled_combos_by_code.get(onet_code, []):
+            yield record
 
 
 def count_hero_combos(
-    occupation_to_tasks: dict[str, list[dict[str, Any]]],
-    valid_onet_codes: list[str],
+    selected_onet_codes: list[str],
+    sampled_combos_by_code: dict[str, list[dict[str, Any]]],
+    combos_by_code: dict[str, int],
+    task_count_by_code: dict[str, int],
     num_tasks: int,
     max_per_occ: int,
 ) -> int:
-    """Count total prompts and print per-occupation breakdown."""
-    per_occ: dict[str, int] = {}
-    for onet_code in sorted(valid_onet_codes):
-        tasks = sorted(
-            occupation_to_tasks[onet_code], key=lambda t: t.get("task_id", "")
-        )
-        selected_combos = coverage_first_sample(tasks, num_tasks, max_per_occ)
-        # Subtract any combos where a task has no loadable server
-        valid_count = 0
-        for combo_indices in selected_combos:
-            selected_tasks = [tasks[i] for i in combo_indices]
-            if all(select_server_id(t, combo_rank=0) is not None for t in selected_tasks):
-                valid_count += 1
-        per_occ[onet_code] = valid_count
+    """Count sampled prompts and print per-occupation prompt + server diversity."""
+    total = 0
+    global_unique_servers: set[str] = set()
+    print(
+        f"\nSelected occupations after diversity sampling "
+        f"(num_tasks={num_tasks}, max_per_occupation={max_per_occ}):"
+    )
+    for code in selected_onet_codes:
+        sampled_records = sampled_combos_by_code.get(code, [])
+        sampled_count = len(sampled_records)
+        total += sampled_count
 
-    total = sum(per_occ.values())
-    print(f"\nPer-occupation prompt counts (num_tasks={num_tasks}, max={max_per_occ}):")
-    for code, cnt in sorted(per_occ.items()):
-        print(f"  {code}: {cnt}")
-    print(f"Total prompts: {total}\n")
+        unique_servers = {
+            sid
+            for rec in sampled_records
+            for sid in rec.get("selected_server_ids", ())
+            if sid
+        }
+        unique_server_tuples = {
+            rec.get("selected_server_ids", ())
+            for rec in sampled_records
+            if rec.get("selected_server_ids")
+        }
+        global_unique_servers.update(unique_servers)
+        possible = combos_by_code.get(code, 0)
+
+        print(
+            f"  {code}: sampled={sampled_count}/{possible} prompts "
+            f"({task_count_by_code.get(code, 0)} tasks), "
+            f"server_diversity={len(unique_servers)} unique servers, "
+            f"unique_server_assignments={len(unique_server_tuples)}"
+        )
+    print(f"Total prompts: {total}")
+    print(
+        "Total unique servers across all selected occupations: "
+        f"{len(global_unique_servers)}\n"
+    )
     return total
 
 
@@ -270,7 +479,8 @@ def count_hero_combos(
 
 def prepare_hero_output_paths(args: argparse.Namespace) -> tuple[str, str, str]:
     output_dirname = (
-        f"hero_selected_{args.num_tasks}tasks_{args.max_per_occupation}max_{args.timestamp}"
+        f"hero_top{args.top_occupations}_{args.num_tasks}tasks_"
+        f"{args.max_per_occupation}max_diversity_{args.timestamp}"
     )
     output_base_dir = os.path.join(args.output_folder, args.job_name or output_dirname)
     os.makedirs(output_base_dir, exist_ok=True)
@@ -307,27 +517,58 @@ def main() -> None:
     tasks_filtered = filter_tasks_with_loadable_servers(inputs.tasks_list, inputs.server_index)
     occupation_to_tasks = create_occupation_to_tasks_index(tasks_filtered)
 
-    # Keep only selected occupations that have enough tasks
-    valid_onet_codes = sorted(
-        code
-        for code, tasks in occupation_to_tasks.items()
-        if code in selected_onet_codes and len(tasks) >= args.num_tasks
+    # Keep top-K selected occupations by number of possible task combinations.
+    selected_codes, combos_by_code, task_count_by_code, dropped_insufficient = (
+        select_top_occupations_by_scenarios(
+            occupation_to_tasks=occupation_to_tasks,
+            selected_onet_codes=selected_onet_codes,
+            num_tasks=args.num_tasks,
+            top_occupations=args.top_occupations,
+        )
     )
 
-    missing = selected_onet_codes - set(valid_onet_codes)
-    if missing:
+    if dropped_insufficient:
         print(
-            f"Warning: {len(missing)} selected occupation(s) have fewer than "
-            f"{args.num_tasks} loadable tasks and will be skipped: {sorted(missing)}"
+            f"Warning: {len(dropped_insufficient)} selected occupation(s) have fewer than "
+            f"{args.num_tasks} loadable tasks and were skipped: {sorted(dropped_insufficient)}"
         )
+
+    if not selected_codes:
+        print("No occupations available after filtering; exiting.")
+        return
+
+    if len(selected_codes) < args.top_occupations:
+        print(
+            f"Warning: Requested top {args.top_occupations} occupations, "
+            f"but only {len(selected_codes)} are available."
+        )
+
     print(
-        f"Generating prompts for {len(valid_onet_codes)} occupations "
-        f"(max {args.max_per_occupation} per occupation)"
+        f"Generating prompts for top {len(selected_codes)} selected occupations "
+        f"by scenario count (up to {args.max_per_occupation} sampled scenarios per occupation)."
+    )
+
+    sampled_combos_by_code = build_sampled_combo_records(
+        occupation_to_tasks=occupation_to_tasks,
+        selected_onet_codes=selected_codes,
+        num_tasks=args.num_tasks,
+        max_per_occ=args.max_per_occupation,
+        server_index=inputs.server_index,
+        min_tools=args.num_tools,
     )
 
     total_prompts = count_hero_combos(
-        occupation_to_tasks, valid_onet_codes, args.num_tasks, args.max_per_occupation
+        selected_codes,
+        sampled_combos_by_code,
+        combos_by_code,
+        task_count_by_code,
+        args.num_tasks,
+        args.max_per_occupation,
     )
+
+    if args.count_only:
+        print("Count-only mode enabled; no output file generated.")
+        return
 
     output_base_dir, output_file_path, args_file_path = prepare_hero_output_paths(args)
     args_dict = save_generation_args(args, args_file_path)
@@ -357,7 +598,7 @@ def main() -> None:
         total_prompts=total_prompts,
         worker_count=worker_count,
         combo_iterator=iter_hero_combos(
-            occupation_to_tasks, valid_onet_codes, args.num_tasks, args.max_per_occupation
+            sampled_combos_by_code, selected_codes
         ),
         build_row_fn=build_row_fn,
         output_file_path=output_file_path,

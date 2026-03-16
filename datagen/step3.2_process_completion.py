@@ -5,7 +5,7 @@ import json
 import re
 import time
 from tqdm import tqdm
-from utils import clean_json_object, create_preview_json
+from utils import clean_json_object, create_preview_json, get_trajectory_status
 
 ################
 # Configurations
@@ -254,9 +254,14 @@ def filter_completions(input_file, output_file, preview_file=None):
     # Statistics tracking
     stats = {
         "total_processed": 0,
+        "total_multi_turn": 0,
+        "total_turn_expired": 0,
         "valid_entries": 0,
         "valid_no_tool_calls": 0,
         "valid_tool_calls_no_final_response": 0,
+        "valid_multi_turn": 0,
+        "valid_turn_expired": 0,
+        "valid_with_end_conversation": 0,
         "filtered_out": {
             "no_system_prompt": 0,
             "empty_final_assistant_message": 0,
@@ -269,17 +274,41 @@ def filter_completions(input_file, output_file, preview_file=None):
             try:
                 data = json.loads(line)
                 stats["total_processed"] += 1
+
+                msgs = data.get("messages", [])
+                traj_status = get_trajectory_status(msgs)
+                if traj_status["is_multi_turn"]:
+                    stats["total_multi_turn"] += 1
+                if traj_status["turn_expired"]:
+                    stats["total_turn_expired"] += 1
                 
                 # Apply filtering rules
                 is_valid, reason = is_valid_entry(data, file_path=input_file)
                 
                 if is_valid:
                     stats["valid_entries"] += 1
-                    msgs = data.get("messages", [])
                     if not has_tool_calls(msgs):
                         stats["valid_no_tool_calls"] += 1
                     if has_tool_calls_but_no_final_response(msgs):
                         stats["valid_tool_calls_no_final_response"] += 1
+                    if traj_status["is_multi_turn"]:
+                        stats["valid_multi_turn"] += 1
+                    if traj_status["turn_expired"]:
+                        stats["valid_turn_expired"] += 1
+                    if traj_status["ended_with_end_conversation"]:
+                        stats["valid_with_end_conversation"] += 1
+
+                    metadata = data.setdefault("metadata", {})
+                    metadata["trajectory_status"] = {
+                        "user_turn_count": traj_status["user_turn_count"],
+                        "assistant_turn_count": traj_status["assistant_turn_count"],
+                        "is_multi_turn": traj_status["is_multi_turn"],
+                        "last_role": traj_status["last_role"],
+                        "ended_with_end_conversation": traj_status["ended_with_end_conversation"],
+                        "has_end_conversation_tag": traj_status["has_end_conversation_tag"],
+                        "trailing_tool_call": traj_status["trailing_tool_call"],
+                        "turn_expired": traj_status["turn_expired"],
+                    }
 
                     # Clean unusual line terminators
                     data = clean_json_object(data)
@@ -315,9 +344,14 @@ def print_filtering_summary(stats):
     filtered = total - valid
     
     print(f"Total Entries Processed: {total}")
+    print(f"  (of which multi-turn): {stats['total_multi_turn']} ({(stats['total_multi_turn']/total*100):.1f}%)")
+    print(f"  (of which turn-expired): {stats['total_turn_expired']} ({(stats['total_turn_expired']/total*100):.1f}%)")
     print(f"Valid Entries: {valid} ({(valid/total*100):.1f}%)")
     print(f"  (of which no tool calls): {stats['valid_no_tool_calls']} ({(stats['valid_no_tool_calls']/total*100):.1f}%)")
     print(f"  (of which tool calls but no final response): {stats['valid_tool_calls_no_final_response']} ({(stats['valid_tool_calls_no_final_response']/total*100):.1f}%)")
+    print(f"  (of which multi-turn): {stats['valid_multi_turn']} ({(stats['valid_multi_turn']/total*100):.1f}%)")
+    print(f"  (of which turn-expired): {stats['valid_turn_expired']} ({(stats['valid_turn_expired']/total*100):.1f}%)")
+    print(f"  (ended with <END_CONVERSATION>): {stats['valid_with_end_conversation']} ({(stats['valid_with_end_conversation']/total*100):.1f}%)")
     print(f"Filtered Out: {filtered} ({(filtered/total*100):.1f}%)")
     
     print("\nFiltering Breakdown:")
