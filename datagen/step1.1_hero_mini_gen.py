@@ -510,7 +510,7 @@ def main() -> None:
 
     ##--no_refs still
     # controls whether task references are loaded and inserted at runtime.
-    paths = resolve_paths(script_dir, no_refs=False, self_contained=args.self_contained)
+    paths = resolve_paths(script_dir, no_refs=args.no_refs, self_contained=args.self_contained)
     inputs = load_inputs(paths, args)
 
     # Filter tasks to those with loadable servers, then build occupation index
