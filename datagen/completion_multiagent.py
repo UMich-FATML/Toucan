@@ -73,17 +73,14 @@ def get_args():
     parser.add_argument("--start_idx", type=int, default=0, help="Start index (inclusive) of rows to process.")
     parser.add_argument("--batch_size", type=int, default=None, help="Optional number of rows to process from start_idx.")
     parser.add_argument("--checkpoint_every", type=int, default=16, help="Save checkpoint every n completed items")
-    parser.add_argument("--openrouter_url", type=str, default="https://openrouter.ai/api/v1", help="OpenRouter API URL")
-    parser.add_argument("--openrouter_api_key", type=str, default="", help="OpenRouter API Key")
-    parser.add_argument("--vllm_api_url", type=str, default="http://localhost:8000/v1", help="vLLM API URL")
-    parser.add_argument("--vllm_api_key", type=str, default="EMPTY", help="vLLM API Key")
+    parser.add_argument("--base_url", type=str, default="http://localhost:8000/v1", help="OpenAI-compatible API base URL ending with /v1.")
+    parser.add_argument("--api_key", type=str, default="EMPTY", help="API key for the endpoint.")
     parser.add_argument("--smithery_api_key", type=str, default="", help="Smithery API Key")
     parser.add_argument("--smithery_profile", type=str, default="", help="Smithery Profile")
     parser.add_argument("--smithery_api_pool", type=str, default="smithery_api_pool.json", help="Path to Smithery API pool JSON file")
     parser.add_argument("--max_workers", type=int, default=None, help="Maximum number of parallel workers")
 
     # Generation Parameters
-    parser.add_argument('--engine', default="openrouter_api", type=str, choices=["vllm_api", "openrouter_api"])
     parser.add_argument("--max_tokens", type=int, default=32768)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top_p", type=float, default=1.0)
@@ -137,6 +134,12 @@ if args.user_model != args.model_path:
     )
 args.virtual_tool_model = args.virtual_tool_model or args.model_path
 
+# Normalize base_url
+normalized_base_url = args.base_url.rstrip("/").removesuffix("/chat/completions")
+if not normalized_base_url.endswith("/v1"):
+    raise ValueError("--base_url must end with /v1.")
+args.base_url = normalized_base_url
+
 # Constants
 MODEL_NAME = args.model_path
 INPUT_FILE_NAME = args.input_file
@@ -144,41 +147,6 @@ CHECKPOINT_EVERY = args.checkpoint_every
 
 model_abbreviation = get_model_abbreviation(args.model_path)
 config_str = f"{model_abbreviation}_multiagent_pfc" if args.parallel_function_calls else f"{model_abbreviation}_multiagent_sfc"
-
-# Resolve API keys from env vars
-if args.engine == "openrouter_api" and not args.openrouter_api_key:
-    args.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
-    if not args.openrouter_api_key:
-        print("⚠️  Warning: OpenRouter API Key is missing! (Env var OPENROUTER_API_KEY not found)")
-
-# API Setups
-if args.engine == "openrouter_api":
-    API_ENDPOINT = args.openrouter_url + "/chat/completions"
-    API_HEADERS = {
-        "Authorization": f"Bearer {args.openrouter_api_key}",
-        "Content-Type": "application/json"
-    }
-    API_PARAMS = {
-        "model": args.model_path,
-        "max_tokens": args.max_tokens,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-        "parallel_tool_calls": args.parallel_function_calls,
-        "reasoning": {"effort": args.reasoning_effort},
-    }
-elif args.engine == "vllm_api":
-    API_ENDPOINT = args.vllm_api_url + "/chat/completions"
-    API_HEADERS = {
-        "Authorization": f"Bearer {args.vllm_api_key}",
-        "Content-Type": "application/json"
-    }
-    API_PARAMS = {
-        "model": args.model_path,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-        "parallel_tool_calls": args.parallel_function_calls,
-        "reasoning": {"effort": args.reasoning_effort},
-    }
 
 # Global API pool variable
 smithery_api_pool = None
@@ -918,13 +886,8 @@ async def process_single_item_multiagent_async(item, api_key=None, profile=None)
 
 
 def _make_client():
-    """Create an AsyncClient for the configured engine."""
-    if args.engine == "openrouter_api":
-        return AsyncClient(base_url=args.openrouter_url, api_key=args.openrouter_api_key)
-    elif args.engine == "vllm_api":
-        return AsyncClient(base_url=args.vllm_api_url, api_key=args.vllm_api_key)
-    else:
-        raise ValueError(f"Unknown engine: {args.engine}")
+    """Create an AsyncClient for the configured endpoint."""
+    return AsyncClient(base_url=args.base_url, api_key=args.api_key)
 
 
 @timeout(args.timeout, use_signals=False)
@@ -1115,7 +1078,7 @@ def generate_and_update(dataset, checkpoint_file):
     processed_dataset = copy.deepcopy(dataset)
 
     generation_params = {
-        "engine": args.engine,
+        "base_url": args.base_url,
         "model_path": args.model_path,
         "student_model": args.model_path,
         "user_model": args.model_path,
@@ -1235,6 +1198,7 @@ def main():
     print(f"User max turns: {args.user_max_turns}")
     print(f"Max agent turns per student response: {args.max_turns}")
     print(f"Tool mode:     {'Virtual' if args.virtual_tools else 'Real MCP'}")
+    print(f"Endpoint: {args.base_url}")
     print(f"Workers: {effective_workers}")
     print(f"Timeout per item: {args.timeout} seconds")
     print("=" * 50)
