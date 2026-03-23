@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "O*NET Task Tool-Use Output Schema",
+  "description": "Structured output schema for prompt template prompts/genq_from_onet_tasks.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool_analysis",
+    "cross_tool_workflow",
+    "target_tools",
+    "request"
+  ],
+  "properties": {
+    "tool_analysis": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Analysis of how selected tools support the provided O*NET tasks."
+    },
+    "cross_tool_workflow": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Workflow across tools including dependencies and decision points."
+    },
+    "target_tools": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered tool calls required to satisfy the request.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "server",
+          "tool",
+          "arguments",
+          "output"
+        ],
+        "properties": {
+          "server": {
+            "type": "string",
+            "minLength": 1,
+            "description": "MCP server name that provides the tool."
+          },
+          "tool": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Tool name on the selected server."
+          },
+          "arguments": {
+            "type": "object",
+            "description": "Tool call arguments matching the tool input schema.",
+            "additionalProperties": true
+          },
+          "output": {
+            "description": "Expected output from executing the tool call."
+          }
+        }
+      }
+    },
+    "request": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Natural language user request grounded in the O*NET tasks."
+    },
+    "withheld_info": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "description": "Parameters deliberately omitted from the request that the agent must ask about.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["parameter", "description", "value"],
+        "properties": {
+          "parameter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short name for the withheld parameter (e.g., 'account_id', 'date_range')."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Why this parameter is needed and what tool(s) require it."
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The actual value that should be supplied when the agent asks for it."
+          }
+        }
+      }
+    },
+    "target_followup_questions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Clarifying questions the agent should ask to obtain the withheld parameters.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}
